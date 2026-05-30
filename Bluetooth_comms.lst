@@ -1,0 +1,86 @@
+gavrasm Gerd's AVR assembler version 5.4 (C)2022 by DG4FAC
+----------------------------------------------------------
+
+Path:        C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\
+Source file: Bluetooth_comms.asm
+Hex file:    Bluetooth_comms.hex
+Eeprom file: Bluetooth_comms.eep
+Compiled:    30.05.2026, 12:48:21
+Pass:        2
+
+     1: .include m328Pdef.inc
+ -> Warning 009: Include defs not necessary, using internal values!
+   File: C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\Bluetooth_comms.asm, Line: 1
+   Source line: .include m328Pdef.inc
+     2: .org 0x0000
+     3: 
+     4: .equ UBRR_VAL = 103 ; define constante representando o baud rate da comunicação UART em 9600bps
+     5:                     ; UBBR_VAL = (f_clk/(16*baud_rate)) - 1
+     6: ;Inicialização SP
+     7: 000000   EF0F  ldi     R16,LOW(RAMEND)
+     8: 000001   BF0D  out     SPL,R16
+     9: 000002   E008  ldi     R16,HIGH(RAMEND)
+    10: 000003   BF0E  out     SPH,R16
+    11: 
+    12: ;Configura porta B como saída para exibir o caracter recebido
+    13: 000004   EF0F  ser     r16
+    14: 000005   B904  out     DDRB,r16; configura todos os pinos da porta B como saída
+    15: 000006   2700  clr     r16
+    16: 000007   B905  out     PORTB,r16
+    17: 
+    18: ;Inicialização comunicação USART
+    19: 
+    20: ;Configuração baud rate (taxa de comunicação -> 9,6 kHz ou kbps)
+    21: 000008   E000  ldi     r16,HIGH(UBRR_VAL)
+    22: 000009   9300  sts     UBRR0H,r16
+        00000A   00C5
+    23: 00000B   E607  ldi     r16,LOW(UBRR_VAL)
+    24: 00000C   9300  sts     UBRR0L,r16
+        00000D   00C4
+    25: 
+    26: ;Habilitação do RX do UART0
+    27: 00000E   E100  ldi     r16,(1<<RXEN0);Criação de máscara que seta '1' na posição do bit RXEN0
+    28: 00000F   9300  sts     UCSR0B,r16
+        000010   00C1
+    29: 
+    30: ;Configuração do formato do frame de comunicação
+    31: 000011   E006  ldi     r16,(1<<UCSZ01) | (1<<UCSZ00)
+    32: 000012   9300  sts     UCSR0C,r16;Seta os bits 2:1, definindo tamanho de caracter para 8 bits
+        000013   00C2
+    33:                   ;Configura modo assíncrono (bit7:bit6 = 00)
+    34:                   ;Modo de paridade desabilitado (bit5:bit4 = 00)
+    35: 
+    36: ;Loop que aguarda chegar alguma instrução do controle bluetooth
+    37: loop:
+    38: 000014   9100  lds     r16,UCSR0A
+        000015   00C0
+    39: 000016   FF07  sbrs    r16, RXC0     ;Pula para a leitura do dado caso haja dados no buffer a serem lidos (RXC0 set) -> Pode gerar interrupção
+    40: 000017   CFFC  rjmp    loop          ;Reinicia
+    41: 
+    42: ;Leitura do dado e exibição na portaB
+    43: 000018   9110  lds     r17,UDR0      ;Registrador que armazena o dado recebido por RX0
+        000019   00C6
+    44: 00001A   B915  out     PORTB,r17     ;Joga o dado lido nos leds da porta B
+    45: 00001B   CFF8  rjmp    loop          ;Reinicia loop
+    46: 
+    47: 
+    48: 
+
+List of symbols:
+Type nDef nUsed             Decimalval           Hexval Name
+  T     1     1                    171               AB ATMEGA328P
+  L     1     4                     20               14 LOOP
+  C     1     0                     26               1A NOW_Y
+  C     1     0                      5               05 NOW_M
+  C     1     0                     30               1E NOW_D
+  C     1     0                  46172             B45C NOW_I
+  C     1     2                    103               67 UBRR_VAL
+   No macros.
+
+Program             :       28 words.
+Constants           :        0 words.
+Total program memory:       28 words.
+Eeprom space        :        0 bytes.
+Data segment        :        0 bytes.
+Compilation completed, no errors.
+Compilation ended 30.05.2026, 12:48:21
