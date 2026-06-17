@@ -11,42 +11,6 @@
 #define IN3 26
 #define IN4 25
 
-#define MODE_BUTTON 4
-
-struct ButtonState {
-  const int pin;              
-  int lastReadingState;     // para saber o estado anterior (debounce)
-  unsigned long lastTimePressed; // para o temporizador do debounce
-  bool triggered;
-};
-
-ButtonState button = {
-  .pin = MODE_BUTTON, 
-  .lastReadingState = HIGH, //PULLUP
-  .lastTimePressed = 0,
-  .triggered = false
-};
-
-const long DEBOUNCE_DELAY_MS = 50; 
-
-//Função para debounce do botão
-bool checkStablePress(ButtonState& btn) {
-  int leitura = digitalRead(btn.pin);
-
-  if (leitura != btn.lastReadingState) {
-    btn.lastTimePressed = millis();
-    btn.lastReadingState = leitura;
-  }
-
-  if ((millis() - btn.lastTimePressed) > DEBOUNCE_DELAY_MS && leitura == LOW && !btn.triggered) {
-    btn.triggered = true;  // novo campo na struct
-    return true;
-  }
-
-  if (leitura == HIGH) btn.triggered = false; // reseta ao soltar
-  return false;
-}
-
 //Velocidades iniciais dos motores
 const char velMotorA = 100; 
 const char velMotorB = 100;

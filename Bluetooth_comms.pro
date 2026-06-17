@@ -1,8 +1,8 @@
 /avr_sim_project_file
 C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\Bluetooth_comms.asm
 mainasm=Bluetooth_comms.asm
-file=Bluetooth_comms.lst,1,1,1
-file=Bluetooth_comms.asm,1,1,48
+file=Bluetooth_comms.lst,70,1,1
+file=Bluetooth_comms.asm,120,13,74
 clock=1000000
 device-type=ATmega328P
 device-package=28-pin-PDIP
