@@ -1,0 +1,302 @@
+gavrasm Gerd's AVR assembler version 5.4 (C)2022 by DG4FAC
+----------------------------------------------------------
+
+Path:        /home/aluno/Documentos/Goncalo/Sistemas-Embarcados-main/
+Source file: Ultrassom.asm
+Hex file:    Ultrassom.hex
+Eeprom file: Ultrassom.eep
+Compiled:    23.06.2026, 16:53:49
+Pass:        2
+
+     1: ; ============================================================
+     2: ; PROJETO: CARRINHO AUTÔNOMO - SENSOR ULTRASSÔNICO HC-SR04
+     3: ; MCU    : ATmega328P @ 16MHz
+     4: ; Autor  : Implementação independente, baseada no datasheet
+     5: ;
+     6: ; LIGAÇÕES:
+     7: ;   TRIG -> PD2 (pino digital 2 no Arduino)
+     8: ;   ECHO -> PD3 (pino digital 3 no Arduino)
+     9: ;   LED  -> PD4 (pino digital 4 no Arduino)
+    10: ;
+    11: ; PRINCÍPIO DE FUNCIONAMENTO (datasheet HC-SR04):
+    12: ;   - Pulso HIGH >= 10us no TRIG dispara a medição
+    13: ;   - Sensor emite burst ultrassônico de 40kHz
+    14: ;   - ECHO fica HIGH durante o tempo de ida-e-volta do som
+    15: ;   - Distância (cm) = tempo_em_us / 58
+    16: ;
+    17: ; OBJETIVO:
+    18: ;   Medir distância continuamente. Se distância < 5cm,
+    19: ;   acende LED (sinal para o carrinho fazer curva).
+    20: ; ============================================================
+    21: 
+    22: .include "m328Pdef.inc"
+ -> Warning 009: Include defs not necessary, using internal values!
+   File: /home/aluno/Documentos/Goncalo/Sistemas-Embarcados-main/Ultrassom.asm, Line: 22
+   Source line: .include "m328Pdef.inc"
+    23: 
+    24: .def    TEMP1   = R16
+    25: .def    TEMP2   = R17
+    26: .def    TEMP3   = R18
+    27: .def    DIST_CM = R20       ; resultado final da medição
+    28: 
+    29: .equ    PORTA_SENSOR = PORTD
+    30: .equ    DDR_SENSOR   = DDRD
+    31: .equ    PIN_SENSOR   = PIND
+    32: 
+    33: .equ    TRIG = 2             ; PD2
+    34: .equ    ECHO = 3             ; PD3
+    35: .equ    LED  = 4             ; PD4
+    36: 
+    37: .equ    LIMIAR_CM = 10        ; distância de detecção em cm
+    38: 
+    39: ; ============================================================
+    40: ; TABELA DE VETORES
+    41: ; ============================================================
+    42: .cseg
+    43: .org    0x0000
+    44: 000000   C000  rjmp    INICIO
+    45: 
+    46: ; ============================================================
+    47: ; INÍCIO DO PROGRAMA
+    48: ; ============================================================
+    49: INICIO:
+    50:         ; --- Pilha ---
+    51: 000001   EF0F  ldi     TEMP1, low(RAMEND)
+    52: 000002   BF0D  out     SPL, TEMP1
+    53: 000003   E008  ldi     TEMP1, high(RAMEND)
+    54: 000004   BF0E  out     SPH, TEMP1
+    55: 
+    56:         ; --- Direção dos pinos ---
+    57: 000005   9A52  sbi     DDR_SENSOR, TRIG    ; TRIG = saída
+    58: 000006   9853  cbi     DDR_SENSOR, ECHO    ; ECHO = entrada
+    59: 000007   9A54  sbi     DDR_SENSOR, LED     ; LED  = saída
+    60: 
+    61:         ; --- Estado inicial ---
+    62: 000008   985A  cbi     PORTA_SENSOR, TRIG
+    63: 000009   985C  cbi     PORTA_SENSOR, LED
+    64: 
+    65:         ; --- Timer1 em modo normal, sem prescaler ainda ---
+    66: 00000A   2700  clr     TEMP1
+    67: 00000B   9300  sts     TCCR1A, TEMP1
+        00000C   0080
+    68: 00000D   9300  sts     TCCR1B, TEMP1
+        00000E   0081
+    69: 
+    70: ; ============================================================
+    71: ; LAÇO PRINCIPAL
+    72: ; ============================================================
+    73: LOOP_PRINCIPAL:
+    74: 00000F   D00A  rcall   DISPARA_TRIGGER
+    75: 000010   D011  rcall   ESPERA_ECHO_SUBIR
+    76: 000011   F018  brcs    SEM_ECO              ; carry=1 -> sensor não respondeu
+    77: 
+    78: 000012   D01B  rcall   CRONOMETRA_ECHO
+    79: 000013   D02B  rcall   CONVERTE_PARA_CM
+    80: 000014   C001  rjmp    AVALIA_DISTANCIA
+    81: 
+    82: SEM_ECO:
+    83: 000015   EF4F  ldi     DIST_CM, 255         ; valor alto = "livre"
+    84: 
+    85: AVALIA_DISTANCIA:
+    86: 000016   D02F  rcall   ATUALIZA_LED
+    87: 
+    88:         ; pausa entre medições (~80ms, recomendado pelo datasheet)
+    89: 000017   E500  ldi     TEMP1, 80
+    90: 000018   D033  rcall   ESPERA_MS
+    91: 
+    92: 000019   CFF5  rjmp    LOOP_PRINCIPAL
+    93: 
+    94: ; ============================================================
+    95: ; SUB-ROTINA: DISPARA_TRIGGER
+    96: ; Gera pulso de 10us no pino TRIG
+    97: ; ============================================================
+    98: DISPARA_TRIGGER:
+    99: 00001A   9A5A  sbi     PORTA_SENSOR, TRIG
+   100:         ; 10us a 16MHz = 160 ciclos de clock
+   101: 00001B   E302  ldi     TEMP1, 50
+   102: PULSO_TRIG: ;Aguarda 10 microsseg com TRIG em HIGH (implementado com decremento)
+   103: 00001C   0000  nop
+   104: 00001D   0000  nop
+   105: 00001E   950A  dec     TEMP1
+   106: 00001F   F7E1  brne    PULSO_TRIG
+   107: 000020   985A  cbi     PORTA_SENSOR, TRIG
+   108: 000021   9508  ret
+   109: 
+   110: ; ============================================================
+   111: ; SUB-ROTINA: ESPERA_ECHO_SUBIR
+   112: ; Aguarda o pino ECHO ir para nível alto.
+   113: ; Retorna: Carry = 1 se houve timeout (sem resposta do sensor)
+   114: ;          Carry = 0 se ECHO subiu normalmente
+   115: ; ============================================================
+   116: ESPERA_ECHO_SUBIR:
+   117: 000022   931F  push    TEMP2
+   118: 000023   E010  ldi     TEMP2, 0            ; contador de timeout (256 voltas)
+   119: LACO_ESPERA_SUBIDA:
+   120: 000024   994B  sbic    PIN_SENSOR, ECHO    ; se ECHO=0, pula a próxima linha
+   121: 000025   C005  rjmp    ECHO_OK_SUBIU
+   122: 000026   951A  dec     TEMP2
+   123: 000027   F7E1  brne    LACO_ESPERA_SUBIDA
+   124:         ; esgotou o tempo
+   125: 000028   911F  pop     TEMP2
+   126: 000029   9408  sec                         ; seta carry = timeout
+   127: 00002A   9508  ret
+   128: 
+   129: ECHO_OK_SUBIU:
+   130: 00002B   911F  pop     TEMP2
+   131: 00002C   9488  clc                         ; limpa carry = sucesso
+   132: 00002D   9508  ret
+   133: 
+   134: ; ============================================================
+   135: ; SUB-ROTINA: CRONOMETRA_ECHO
+   136: ; Usa Timer1 (16 bits) com prescaler de 8 para contar
+   137: ; quanto tempo o pino ECHO permanece em nível alto.
+   138: ;
+   139: ; Prescaler 8 @ 16MHz -> 1 tick = 0.5us
+   140: ; Resultado fica em TEMP1:TEMP2 (não usado depois, pois
+   141: ; convertemos direto pegando só os 8 bits baixos, que já
+   142: ; cobrem distâncias de até ~25cm, suficiente para detecção
+   143: ; de obstáculo próximo)
+   144: ; ============================================================
+   145: CRONOMETRA_ECHO:
+   146:         ; zera Timer1
+   147: 00002E   2700  clr     TEMP1
+   148: 00002F   9300  sts    TCNT1H, TEMP1
+        000030   0085
+   149: 000031   9300  sts     TCNT1L, TEMP1
+        000032   0084
+   150: 
+   151:         ; liga Timer1 com prescaler 8 (CS12=0 CS11=1 CS10=0)
+   152: 000033   E002  ldi     TEMP1, (1<<CS11)
+   153: 000034   9300  sts    TCCR1B, TEMP1
+        000035   0081
+   154: 
+   155: ESPERA_ECHO_DESCER:
+   156: 000036   9B4B  sbis    PIN_SENSOR, ECHO    ; se ECHO=1, pula a próxima
+   157: 000037   C001  rjmp    ECHO_OK_DESCEU
+   158: 000038   CFFD  rjmp    ESPERA_ECHO_DESCER
+   159:         ;Inserir timeout para descida do ECHO
+   160: 
+   161: ECHO_OK_DESCEU:
+   162:         ; para o Timer1
+   163: 000039   2700  clr     TEMP1
+   164: 00003A   9300  sts     TCCR1B, TEMP1
+        00003B   0081
+   165: 
+   166:         ; lê resultado (usamos só byte baixo, suficiente p/ curto alcance) REVER QUAL O ALCANCE
+   167: 00003C   9120  lds      TEMP3, TCNT1L
+        00003D   0084
+   168: 00003E   9508  ret
+   169: 
+   170: ; ============================================================
+   171: ; SUB-ROTINA: CONVERTE_PARA_CM
+   172: ; Entrada: TEMP3 = contagem do Timer1 (1 tick = 0.5us)
+   173: ; Saída  : DIST_CM = distância em centímetros
+   174: ;
+   175: ; Fórmula real:     cm = tempo_us / 58 VERIFICAR DE ONDE VEM O VALOR 58
+   176: ; Como tempo_us = TEMP3 * 0.5, então:
+   177: ;     cm = (TEMP3 * 0.5) / 58 = TEMP3 / 116
+   178: ;
+   179: ; Implementado por subtração repetida (divisão por 116)
+   180: ; ============================================================
+   181: CONVERTE_PARA_CM:
+   182: 00003F   2744  clr     DIST_CM
+   183: DIV_LOOP:
+   184: 000040   3724  cpi     TEMP3, 116
+   185: 000041   F018  brlo    DIV_FIM
+   186: 000042   5724  subi    TEMP3, 116
+   187: 000043   9543  inc     DIST_CM
+   188: 000044   CFFB  rjmp    DIV_LOOP
+   189: DIV_FIM:
+   190: 000045   9508  ret
+   191: 
+   192: ; ============================================================
+   193: ; SUB-ROTINA: ATUALIZA_LED
+   194: ; Entrada: DIST_CM
+   195: ; Acende LED se DIST_CM < LIMIAR_CM (obstáculo próximo)
+   196: ; ============================================================
+   197: ATUALIZA_LED:
+   198: 000046   304A  cpi     DIST_CM, LIMIAR_CM
+   199: 000047   F410  brsh    LONGE
+   200: 000048   9A5C  sbi     PORTA_SENSOR, LED   ; obstáculo detectado
+   201: 000049   9508  ret
+   202: LONGE:
+   203: 00004A   985C  cbi     PORTA_SENSOR, LED   ; caminho livre
+   204: 00004B   9508  ret
+   205: 
+   206: ; ============================================================
+   207: ; SUB-ROTINA: ESPERA_MS
+   208: ; Entrada: TEMP1 = número de milissegundos
+   209: ; Delay aproximado calibrado para 16MHz
+   210: ; ============================================================
+   211: ESPERA_MS:
+   212: 00004C   930F  push    TEMP1
+   213: 00004D   931F  push    TEMP2
+   214: 00004E   932F  push    TEMP3
+   215: LOOP_MS:
+   216: 00004F   E014  ldi     TEMP2, 4
+   217: LOOP_4:
+   218: 000050   EF2A  ldi     TEMP3, 250
+   219: LOOP_250:
+   220: 000051   952A  dec     TEMP3
+   221: 000052   F7F1  brne    LOOP_250
+   222: 000053   951A  dec     TEMP2
+   223: 000054   F7D9  brne    LOOP_4
+   224: 000055   950A  dec     TEMP1
+   225: 000056   F7C1  brne    LOOP_MS
+   226: 000057   912F  pop     TEMP3
+   227: 000058   911F  pop     TEMP2
+   228: 000059   910F  pop     TEMP1
+   229: 00005A   9508  ret
+   230: 
+   231: ; ============================================================
+   232: ; FIM DO PROGRAMA
+   233: ; ============================================================;
+
+List of symbols:
+Type nDef nUsed             Decimalval           Hexval Name
+  T     1     1                    171               AB ATMEGA328P
+  L     1     2                      1               01 INICIO
+  L     1     2                     15               0F LOOP_PRINCIPAL
+  L     1     2                     21               15 SEM_ECO
+  L     1     2                     22               16 AVALIA_DISTANCIA
+  L     1     2                     26               1A DISPARA_TRIGGER
+  L     1     2                     28               1C PULSO_TRIG
+  L     1     2                     34               22 ESPERA_ECHO_SUBIR
+  L     1     2                     36               24 LACO_ESPERA_SUBIDA
+  L     1     2                     43               2B ECHO_OK_SUBIU
+  L     1     2                     46               2E CRONOMETRA_ECHO
+  L     1     2                     54               36 ESPERA_ECHO_DESCER
+  L     1     2                     57               39 ECHO_OK_DESCEU
+  L     1     2                     63               3F CONVERTE_PARA_CM
+  L     1     2                     64               40 DIV_LOOP
+  L     1     2                     69               45 DIV_FIM
+  L     1     2                     70               46 ATUALIZA_LED
+  L     1     2                     74               4A LONGE
+  L     1     2                     76               4C ESPERA_MS
+  L     1     2                     79               4F LOOP_MS
+  L     1     2                     80               50 LOOP_4
+  L     1     2                     81               51 LOOP_250
+  R     1    20                     16               10 TEMP1
+  R     1     9                     17               11 TEMP2
+  R     1     7                     18               12 TEMP3
+  R     1     4                     20               14 DIST_CM
+  C     1     0                     26               1A NOW_Y
+  C     1     0                      6               06 NOW_M
+  C     1     0                     23               17 NOW_D
+  C     1     0                  46196             B474 NOW_I
+  C     1     6                     11               0B PORTA_SENSOR
+  C     1     3                     10               0A DDR_SENSOR
+  C     1     2                      9               09 PIN_SENSOR
+  C     1     4                      2               02 TRIG
+  C     1     3                      3               03 ECHO
+  C     1     4                      4               04 LED
+  C     1     1                     10               0A LIMIAR_CM
+   No macros.
+
+Program             :       91 words.
+Constants           :        0 words.
+Total program memory:       91 words.
+Eeprom space        :        0 bytes.
+Data segment        :        0 bytes.
+Compilation completed, no errors.
+Compilation ended 23.06.2026, 16:53:49
