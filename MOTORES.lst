@@ -1,0 +1,462 @@
+gavrasm Gerd's AVR assembler version 5.4 (C)2022 by DG4FAC
+----------------------------------------------------------
+
+Path:        /home/aluno/Documentos/Goncalo/
+Source file: MOTORES.asm
+Hex file:    MOTORES.hex
+Eeprom file: MOTORES.eep
+Compiled:    23.06.2026, 15:38:07
+Pass:        2
+
+     1: ;==============================================================================
+     2: ; carrinho_2motores.asm  -  ATmega328P @ 16 MHz
+     3: ;------------------------------------------------------------------------------
+     4: ; Controle de 2 motores DC por 2 pontes-H externas (ex.: L298N / TB6612).
+     5: ;   - 4 modos de movimento: FRENTE, RE, GIRO-DIREITA, GIRO-ESQUERDA (+ PARADO)
+     6: ;   - 1 PWM unico (OC0A / PD6) alimenta os dois ENABLE -> mesma freq. e duty
+     7: ;   - 3 modos de velocidade (lento / padrao / rapido) trocados por botao
+     8: ;   - botoes lidos por amostragem dentro de uma interrupcao de timer, com
+     9: ;     debounce e exigencia de "soltar antes de aceitar novo aperto"
+    10: ;
+    11: ; Toda a temporizacao roda em interrupcao; o loop principal so despacha eventos.
+    12: ;
+    13: ; OBS p/ avr_sim: o dispositivo (ATmega328P) e escolhido no projeto, entao os
+    14: ;   nomes de registradores/bits/vetores ja sao conhecidos -> NAO use .include.
+    15: ;   (Se montar com avra/avrasm2, adicione no topo:  .include "m328Pdef.inc")
+    16: ;==============================================================================
+    17: 
+    18: .include "m328Pdef.inc"
+ -> Warning 009: Include defs not necessary, using internal values!
+   File: /home/aluno/Documentos/Goncalo/MOTORES.asm, Line: 18
+   Source line: .include "m328Pdef.inc"
+    19: 
+    20: ;----------------------------- aliases de registrador -------------------------
+    21: .def temp = r16           ; temporario geral
+    22: .def raw  = r19           ; amostra bruta de PINC dentro da ISR
+    23: 
+    24: ;----------------------------- mapa de pinos ----------------------------------
+    25: ; Ponte-H ESQUERDA (Motor E)         Ponte-H DIREITA (Motor D)
+    26: ;   PD2 = IN1 (E)                      PD4 = IN1 (D)
+    27: ;   PD3 = IN2 (E)                      PD5 = IN2 (D)
+    28: ; Convencao por roda: IN1=1,IN2=0 -> "frente"  |  IN1=0,IN2=1 -> "tras"
+    29: .equ LIN1 = PD2
+    30: .equ LIN2 = PD3
+    31: .equ RIN1 = PD4
+    32: .equ RIN2 = PD5
+    33: 
+    34: ; PWM unico (saida OC0A do Timer0) -> ligar FISICAMENTE em ENA E ENB
+    35: .equ PWM_PIN = PD6
+    36: 
+    37: ; Botoes (PORTC) com pull-up interno; pressionado = nivel BAIXO (vai ao GND)
+    38: .equ BTN_MODE  = PC0      ; cicla o modo de movimento
+    39: .equ BTN_SPEED = PC1      ; cicla a velocidade
+    40: 
+    41: ;----------------------------- estados de movimento ---------------------------
+    42: .equ ST_STOP  = 0
+    43: .equ ST_FWD   = 1
+    44: .equ ST_BWD   = 2
+    45: .equ ST_RIGHT = 3
+    46: .equ ST_LEFT  = 4
+    47: .equ ST_MAX   = 4         ; ultimo estado valido (depois volta a ST_STOP)
+    48: 
+    49: ;----------------------------- modos de velocidade ----------------------------
+    50: .equ SPD_SLOW = 0
+    51: .equ SPD_STD  = 1
+    52: .equ SPD_FAST = 2
+    53: .equ SPD_MAX  = 2
+    54: 
+    55: ; duty cycle (0..255) de cada modo  -> AJUSTE conforme seu motor/ponte
+    56: .equ DUTY_SLOW = 90       ; ~35%
+    57: .equ DUTY_STD  = 160      ; ~63%
+    58: .equ DUTY_FAST = 255      ; 100%
+    59: 
+    60: ;----------------------------- debounce ---------------------------------------
+    61: .equ DEBOUNCE_TICKS = 20  ; 20 amostras * 1 ms = 20 ms estaveis p/ validar
+    62: 
+    63: ; bits do byte de eventos (evFlags)
+    64: .equ EV_MODE  = 0
+    65: .equ EV_SPEED = 1
+    66: 
+    67: ;==============================================================================
+    68: ;                              SEGMENTO DE CODIGO
+    69: ;==============================================================================
+    70: .cseg
+    71: .org 0x0000
+    72: 000000   C033  rjmp RESET            ; vetor de RESET
+    73: 
+    74: .org 0x0016              ; vetor TIMER1_COMPA (OC1Aaddr)
+    75: 000016   C0A5  rjmp TIMER1_COMPA
+    76: 
+    77: .org 0x0034             ; primeira posicao livre apos a tabela de vetores
+    78: ;------------------------------------------------------------------------------
+    79: RESET:
+    80:     ;--- pilha ---
+    81: 000034   E008  ldi temp, high(RAMEND)
+    82: 000035   BF0E  out SPH, temp
+    83: 000036   EF0F  ldi temp, low(RAMEND)
+    84: 000037   BF0D  out SPL, temp
+    85: 
+    86:     ;--- PORTD: PD2..PD6 saida; demais entrada. Tudo 0 = motores parados ---
+    87: 000038   E70C  ldi temp, (1<<LIN1)|(1<<LIN2)|(1<<RIN1)|(1<<RIN2)|(1<<PWM_PIN)
+    88: 000039   B90A  out DDRD, temp
+    89: 00003A   E000  ldi temp, 0x00
+    90: 00003B   B90B  out PORTD, temp
+    91: 
+    92:     ;--- PORTC: PC0/PC1 entrada com pull-up ---
+    93: 00003C   9838  cbi DDRC, BTN_MODE
+    94: 00003D   9839  cbi DDRC, BTN_SPEED
+    95: 00003E   9A40  sbi PORTC, BTN_MODE
+    96: 00003F   9A41  sbi PORTC, BTN_SPEED
+    97: 
+    98:     ;--- Timer0: Fast PWM (modo 3, TOP=0xFF), saida OC0A nao-invertida ---
+    99:     ; COM0A1=1 -> OC0A nao-invertido ; WGM01=1,WGM00=1 -> Fast PWM
+   100: 000040   E803  ldi temp, (1<<COM0A1)|(1<<WGM01)|(1<<WGM00)
+   101: 000041   BD04  out TCCR0A, temp
+   102:     ; CS01=1,CS00=1 -> prescaler /64  => f_pwm = 16MHz/(64*256) ~= 976 Hz
+   103: 000042   E003  ldi temp, (1<<CS01)|(1<<CS00)
+   104: 000043   BD05  out TCCR0B, temp
+   105: 
+   106:     ;--- Timer1: CTC (modo 4), tick periodico de 1 ms p/ ler botoes ---
+   107:     ; TCCR1A fica 0 (reset). WGM12=1 em TCCR1B -> CTC com TOP=OCR1A.
+   108:     ; CS11=1,CS10=1 -> prescaler /64 ; OCR1A=249 -> (249+1)*64/16MHz = 1 ms.
+   109: 000044   E00B  ldi temp, (1<<WGM12)|(1<<CS11)|(1<<CS10)
+   110: 000045   9300  sts TCCR1B, temp
+        000046   0081
+   111: 000047   E000  ldi temp, high(249)
+   112: 000048   9300  sts OCR1AH, temp                 ; escrever H ANTES de L (registrador de 16 bits)
+        000049   0089
+   113: 00004A   EF09  ldi temp, low(249)
+   114: 00004B   9300  sts OCR1AL, temp
+        00004C   0088
+   115: 00004D   E002  ldi temp, (1<<OCIE1A)            ; habilita IRQ de compare match A
+   116: 00004E   9300  sts TIMSK1, temp
+        00004F   006F
+   117: 
+   118:     ;--- variaveis em SRAM ---
+   119: 000050   E000  ldi temp, ST_STOP
+   120: 000051   9300  sts motorState, temp
+        000052   0100
+   121: 000053   E001  ldi temp, SPD_STD
+   122: 000054   9300  sts speedMode, temp
+        000055   0101
+   123: 000056   E001  ldi temp, 1                      ; botoes "armados" (prontos p/ aceitar aperto)
+   124: 000057   9300  sts modeArmed, temp
+        000058   0103
+   125: 000059   9300  sts spdArmed, temp
+        00005A   0105
+   126: 00005B   2700  clr temp
+   127: 00005C   9300  sts modeCnt, temp
+        00005D   0102
+   128: 00005E   9300  sts spdCnt, temp
+        00005F   0104
+   129: 000060   9300  sts evFlags, temp
+        000061   0106
+   130: 
+   131:     ;--- condicao inicial: parado, velocidade padrao ---
+   132: 000062   D04D  rcall apply_speed
+   133: 000063   D028  rcall fsm_apply
+   134: 
+   135: 000064   9478  sei                              ; habilita interrupcoes globais
+   136: 
+   137: ;------------------------------------------------------------------------------
+   138: ; LOOP PRINCIPAL: so despacha os eventos sinalizados pela ISR (mantem ISR curta)
+   139: ;------------------------------------------------------------------------------
+   140: main_loop:
+   141: 000065   9100  lds  temp, evFlags
+        000066   0106
+   142: 000067   FD00  sbrc temp, EV_MODE               ; aperto validado no botao de modo?
+   143: 000068   D005  rcall handle_mode_event
+   144: 000069   9100  lds  temp, evFlags
+        00006A   0106
+   145: 00006B   FD01  sbrc temp, EV_SPEED              ; aperto validado no botao de velocidade?
+   146: 00006C   D010  rcall handle_speed_event
+   147: 00006D   CFF7  rjmp main_loop
+   148: 
+   149: ;==============================================================================
+   150: ; TRATADORES DE EVENTO (rodam fora da ISR)
+   151: ;==============================================================================
+   152: handle_mode_event:
+   153: 00006E   9100  lds  temp, motorState
+        00006F   0100
+   154: 000070   9503  inc  temp                        ; proximo modo
+   155: 000071   3005  cpi  temp, ST_MAX+1
+   156: 000072   F008  brlo hme_ok                      ; ainda dentro da faixa valida?
+   157: 000073   E000  ldi  temp, ST_STOP               ; senao volta ao inicio (PARADO)
+   158: hme_ok:
+   159: 000074   9300  sts  motorState, temp
+        000075   0100
+   160: 000076   D015  rcall fsm_apply                  ; aplica nas saidas das pontes
+   161: 000077   9100  lds  temp, evFlags               ; limpa o flag do evento
+        000078   0106
+   162: 000079   7F0E  cbr  temp, (1<<EV_MODE)
+   163: 00007A   9300  sts  evFlags, temp
+        00007B   0106
+   164: 00007C   9508  ret
+   165: 
+   166: handle_speed_event:
+   167: 00007D   9100  lds  temp, speedMode
+        00007E   0101
+   168: 00007F   9503  inc  temp
+   169: 000080   3003  cpi  temp, SPD_MAX+1
+   170: 000081   F008  brlo hse_ok
+   171: 000082   E000  ldi  temp, SPD_SLOW
+   172: hse_ok:
+   173: 000083   9300  sts  speedMode, temp
+        000084   0101
+   174: 000085   D02A  rcall apply_speed                ; atualiza o duty do PWM unico
+   175: 000086   9100  lds  temp, evFlags
+        000087   0106
+   176: 000088   7F0D  cbr  temp, (1<<EV_SPEED)
+   177: 000089   9300  sts  evFlags, temp
+        00008A   0106
+   178: 00008B   9508  ret
+   179: 
+   180: ;==============================================================================
+   181: ; FSM: aplica nas pontes-H a combinacao correspondente ao motorState
+   182: ;==============================================================================
+   183: fsm_apply:
+   184: 00008C   9100  lds  temp, motorState
+        00008D   0100
+   185: 00008E   3001  cpi  temp, ST_FWD
+   186: 00008F   F039  breq move_forward
+   187: 000090   3002  cpi  temp, ST_BWD
+   188: 000091   F051  breq move_backward
+   189: 000092   3003  cpi  temp, ST_RIGHT
+   190: 000093   F069  breq turn_right
+   191: 000094   3004  cpi  temp, ST_LEFT
+   192: 000095   F081  breq turn_left
+   193: 000096   C014  rjmp motor_stop                  ; ST_STOP (default)
+   194: 
+   195: ;--- FRENTE: as duas rodas "para frente" (carrinho avanca) --------------------
+   196: ; Com motores espelhados, "ambas para frente" corresponde a rotacoes FISICAS
+   197: ; opostas (uma roda horario, outra anti-horario) -> exatamente sua descricao.
+   198: move_forward:
+   199: 000097   9A5A  sbi PORTD, LIN1
+   200: 000098   985B  cbi PORTD, LIN2
+   201: 000099   9A5C  sbi PORTD, RIN1
+   202: 00009A   985D  cbi PORTD, RIN2
+   203: 00009B   9508  ret
+   204: 
+   205: ;--- RE: as duas rodas "para tras" --------------------------------------------
+   206: move_backward:
+   207: 00009C   985A  cbi PORTD, LIN1
+   208: 00009D   9A5B  sbi PORTD, LIN2
+   209: 00009E   985C  cbi PORTD, RIN1
+   210: 00009F   9A5D  sbi PORTD, RIN2
+   211: 0000A0   9508  ret
+   212: 
+   213: ;--- GIRO DIREITA (no proprio eixo): roda E p/ frente, roda D p/ tras ---------
+   214: ; resultado: carrinho gira no sentido horario (visto de cima) = vira p/ direita
+   215: turn_right:
+   216: 0000A1   9A5A  sbi PORTD, LIN1
+   217: 0000A2   985B  cbi PORTD, LIN2
+   218: 0000A3   985C  cbi PORTD, RIN1
+   219: 0000A4   9A5D  sbi PORTD, RIN2
+   220: 0000A5   9508  ret
+   221: 
+   222: ;--- GIRO ESQUERDA (no proprio eixo): roda E p/ tras, roda D p/ frente --------
+   223: turn_left:
+   224: 0000A6   985A  cbi PORTD, LIN1
+   225: 0000A7   9A5B  sbi PORTD, LIN2
+   226: 0000A8   9A5C  sbi PORTD, RIN1
+   227: 0000A9   985D  cbi PORTD, RIN2
+   228: 0000AA   9508  ret
+   229: 
+   230: ;--- PARADO: desliga as 4 chaves (motores em roda-livre) ----------------------
+   231: motor_stop:
+   232: 0000AB   985A  cbi PORTD, LIN1
+   233: 0000AC   985B  cbi PORTD, LIN2
+   234: 0000AD   985C  cbi PORTD, RIN1
+   235: 0000AE   985D  cbi PORTD, RIN2
+   236: 0000AF   9508  ret
+   237: 
+   238: ;==============================================================================
+   239: ; apply_speed: carrega OCR0A com o duty do modo atual (tabela em flash via LPM)
+   240: ;==============================================================================
+   241: apply_speed:
+   242: 0000B0   E7E4  ldi  ZL, low(speed_table << 1)   ; endereco de BYTE da tabela (LPM usa byte)
+   243: 0000B1   E0F1  ldi  ZH, high(speed_table << 1)
+   244: 0000B2   9100  lds  temp, speedMode
+        0000B3   0101
+   245: 0000B4   0FE0  add  ZL, temp                    ; soma o indice (0..2)
+   246: 0000B5   E000  ldi  temp, 0
+   247: 0000B6   1FF0  adc  ZH, temp                    ; propaga eventual carry p/ ZH
+   248: 0000B7   9104  lpm  temp, Z                     ; le o duty da flash
+   249: 0000B8   BD07  out  OCR0A, temp                 ; aplica no PWM
+   250: 0000B9   9508  ret
+   251: 
+   252: ; tabela de duty (4 bytes p/ alinhar em palavra; o 0 final e so padding)
+   253: speed_table:
+   254:     .db DUTY_SLOW, DUTY_STD, DUTY_FAST, 0
+        0000BA A05A 00FF
+   255: 
+   256: ;==============================================================================
+   257: ; ISR Timer1 COMPA  -  executa a cada 1 ms
+   258: ;   - le PINC uma unica vez (amostra coerente dos dois botoes)
+   259: ;   - debounce por contagem; gera evento apenas na borda de aperto validada
+   260: ;   - exige soltar o botao (re-arma) antes de aceitar novo aperto
+   261: ;==============================================================================
+   262: TIMER1_COMPA:
+   263: 0000BC   930F  push temp
+   264: 0000BD   B70F  in   temp, SREG
+   265: 0000BE   930F  push temp                        ; salva SREG na pilha
+   266: 0000BF   933F  push raw
+   267: 
+   268: 0000C0   B136  in   raw, PINC                   ; leitura unica e coerente dos botoes
+   269: 
+   270:     ;------------------ BOTAO DE MODO (PC0) ------------------
+   271: 0000C1   FF30  sbrs raw, BTN_MODE               ; bit=1 -> NAO pressionado -> pula o rjmp
+   272: 0000C2   C007  rjmp mode_pressed
+   273:     ; --- solto: zera contador e re-arma ---
+   274: 0000C3   2700  clr  temp
+   275: 0000C4   9300  sts  modeCnt, temp
+        0000C5   0102
+   276: 0000C6   E001  ldi  temp, 1
+   277: 0000C7   9300  sts  modeArmed, temp
+        0000C8   0103
+   278: 0000C9   C015  rjmp check_speed
+   279: mode_pressed:
+   280: 0000CA   9100  lds  temp, modeCnt
+        0000CB   0102
+   281: 0000CC   3104  cpi  temp, DEBOUNCE_TICKS
+   282: 0000CD   F488  brsh check_speed                 ; ja saturou (aguardando soltar) -> ignora
+   283: 0000CE   9503  inc  temp
+   284: 0000CF   9300  sts  modeCnt, temp
+        0000D0   0102
+   285: 0000D1   3104  cpi  temp, DEBOUNCE_TICKS
+   286: 0000D2   F060  brlo check_speed                 ; ainda nao estabilizou
+   287:     ; estabilizou agora: se armado, gera evento e desarma
+   288: 0000D3   9100  lds  temp, modeArmed
+        0000D4   0103
+   289: 0000D5   2300  tst  temp
+   290: 0000D6   F041  breq check_speed
+   291: 0000D7   2700  clr  temp
+   292: 0000D8   9300  sts  modeArmed, temp
+        0000D9   0103
+   293: 0000DA   9100  lds  temp, evFlags
+        0000DB   0106
+   294: 0000DC   6001  sbr  temp, (1<<EV_MODE)
+   295: 0000DD   9300  sts  evFlags, temp
+        0000DE   0106
+   296: 
+   297:     ;------------------ BOTAO DE VELOCIDADE (PC1) ------------------
+   298: check_speed:
+   299: 0000DF   FF31  sbrs raw, BTN_SPEED
+   300: 0000E0   C007  rjmp spd_pressed
+   301: 0000E1   2700  clr  temp
+   302: 0000E2   9300  sts  spdCnt, temp
+        0000E3   0104
+   303: 0000E4   E001  ldi  temp, 1
+   304: 0000E5   9300  sts  spdArmed, temp
+        0000E6   0105
+   305: 0000E7   C015  rjmp isr_end
+   306: spd_pressed:
+   307: 0000E8   9100  lds  temp, spdCnt
+        0000E9   0104
+   308: 0000EA   3104  cpi  temp, DEBOUNCE_TICKS
+   309: 0000EB   F488  brsh isr_end
+   310: 0000EC   9503  inc  temp
+   311: 0000ED   9300  sts  spdCnt, temp
+        0000EE   0104
+   312: 0000EF   3104  cpi  temp, DEBOUNCE_TICKS
+   313: 0000F0   F060  brlo isr_end
+   314: 0000F1   9100  lds  temp, spdArmed
+        0000F2   0105
+   315: 0000F3   2300  tst  temp
+   316: 0000F4   F041  breq isr_end
+   317: 0000F5   2700  clr  temp
+   318: 0000F6   9300  sts  spdArmed, temp
+        0000F7   0105
+   319: 0000F8   9100  lds  temp, evFlags
+        0000F9   0106
+   320: 0000FA   6002  sbr  temp, (1<<EV_SPEED)
+   321: 0000FB   9300  sts  evFlags, temp
+        0000FC   0106
+   322: 
+   323: isr_end:
+   324: 0000FD   913F  pop  raw
+   325: 0000FE   910F  pop  temp                        ; recupera SREG -> temp
+   326: 0000FF   BF0F  out  SREG, temp
+   327: 000100   910F  pop  temp                        ; recupera temp original
+   328: 000101   9518  reti
+   329: 
+   330: ;==============================================================================
+   331: ;                          SEGMENTO DE DADOS (SRAM)
+   332: ;==============================================================================
+   333: .dseg
+   334: .org SRAM_START                      ; 0x0100 no ATmega328P
+   335: motorState: .byte 1                  ; estado de movimento (0..4)
+   336: speedMode:  .byte 1                  ; modo de velocidade (0..2)
+   337: modeCnt:    .byte 1                  ; contador de debounce do botao de modo
+   338: modeArmed:  .byte 1                  ; 1 = pronto p/ aceitar novo aperto (modo)
+   339: spdCnt:     .byte 1                  ; contador de debounce do botao de velocidade
+   340: spdArmed:   .byte 1                  ; 1 = pronto p/ aceitar novo aperto (veloc.)
+   341: evFlags:    .byte 1                  ; bit0=EV_MODE, bit1=EV_SPEED
+
+List of symbols:
+Type nDef nUsed             Decimalval           Hexval Name
+  T     1     1                    171               AB ATMEGA328P
+  L     1     2                     52               34 RESET
+  L     1     2                    101               65 MAIN_LOOP
+  L     1     2                    110               6E HANDLE_MODE_EVENT
+  L     1     2                    116               74 HME_OK
+  L     1     2                    125               7D HANDLE_SPEED_EVENT
+  L     1     2                    131               83 HSE_OK
+  L     1     4                    140               8C FSM_APPLY
+  L     1     2                    151               97 MOVE_FORWARD
+  L     1     2                    156               9C MOVE_BACKWARD
+  L     1     2                    161               A1 TURN_RIGHT
+  L     1     2                    166               A6 TURN_LEFT
+  L     1     2                    171               AB MOTOR_STOP
+  L     1     4                    176               B0 APPLY_SPEED
+  L     1     2                    186               BA SPEED_TABLE
+  L     1     2                    188               BC TIMER1_COMPA
+  L     1     2                    202               CA MODE_PRESSED
+  L     1     8                    223               DF CHECK_SPEED
+  L     1     2                    232               E8 SPD_PRESSED
+  L     1     8                    253               FD ISR_END
+  L     1     4                    256             0100 MOTORSTATE
+  L     1     4                    257             0101 SPEEDMODE
+  L     1     4                    258             0102 MODECNT
+  L     1     4                    259             0103 MODEARMED
+  L     1     4                    260             0104 SPDCNT
+  L     1     4                    261             0105 SPDARMED
+  L     1    11                    262             0106 EVFLAGS
+  R     1   100                     16               10 TEMP
+  R     1     5                     19               13 RAW
+  C     1     0                     26               1A NOW_Y
+  C     1     0                      6               06 NOW_M
+  C     1     0                     23               17 NOW_D
+  C     1     0                  46196             B474 NOW_I
+  C     1     6                      2               02 LIN1
+  C     1     6                      3               03 LIN2
+  C     1     6                      4               04 RIN1
+  C     1     6                      5               05 RIN2
+  C     1     1                      6               06 PWM_PIN
+  C     1     3                      0               00 BTN_MODE
+  C     1     3                      1               01 BTN_SPEED
+  C     1     2                      0               00 ST_STOP
+  C     1     1                      1               01 ST_FWD
+  C     1     1                      2               02 ST_BWD
+  C     1     1                      3               03 ST_RIGHT
+  C     1     1                      4               04 ST_LEFT
+  C     1     1                      4               04 ST_MAX
+  C     1     1                      0               00 SPD_SLOW
+  C     1     1                      1               01 SPD_STD
+  C     1     0                      2               02 SPD_FAST
+  C     1     1                      2               02 SPD_MAX
+  C     1     1                     90               5A DUTY_SLOW
+  C     1     1                    160               A0 DUTY_STD
+  C     1     1                    255               FF DUTY_FAST
+  C     1     4                     20               14 DEBOUNCE_TICKS
+  C     1     3                      0               00 EV_MODE
+  C     1     3                      1               01 EV_SPEED
+   No macros.
+
+Program             :      206 words.
+Constants           :        2 words.
+Total program memory:      208 words.
+Eeprom space        :        0 bytes.
+Data segment        :        7 bytes.
+Compilation completed, no errors.
+Compilation ended 23.06.2026, 15:38:07
