@@ -76,7 +76,7 @@ LOOP_PRINCIPAL:
         brcs    SEM_ECO              ; carry=1 -> sensor não respondeu
 
         rcall   CRONOMETRA_ECHO
-        rcall   CONVERTE_PARA_CM
+        ;rcall   CONVERTE_PARA_CM   ;(Com PS 1024, o valor de delay do echo é aproximadamente a distânc
         rjmp    AVALIA_DISTANCIA
 
 SEM_ECO:
