@@ -1,8 +1,6 @@
 /avr_sim_project_file
 C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\Bluetooth_simple.asm
-mainasm=Bluetooth_simple.asm
-file=Bluetooth_simple.lst,70,1,1
-file=Bluetooth_simple.asm,1,1,1
+mainasm=
 clock=1000000
 device-type=ATmega328P
 device-package=28-pin-PDIP

@@ -1,0 +1,114 @@
+gavrasm Gerd's AVR assembler version 5.4 (C)2022 by DG4FAC
+----------------------------------------------------------
+
+Path:        C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\Bluetooth\Simple_test\
+Source file: Bluetooth_simple_test.asm
+Hex file:    Bluetooth_simple_test.hex
+Eeprom file: Bluetooth_simple_test.eep
+Compiled:    24.06.2026, 13:02:25
+Pass:        2
+
+     1: .include "m328Pdef.inc"
+ -> Warning 009: Include defs not necessary, using internal values!
+   File: C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\Bluetooth\Simple_test\Bluetooth_simple_test.asm, Line: 1
+   Source line: .include "m328Pdef.inc"
+     2: .org 0x0000
+     3: 
+     4: ;//////////////// DEFINIÇÃO DE CONSTANTES /////////////////////
+     5: 
+     6: ;baud-rate
+     7: 
+     8: .equ UBRR_VAL = 103 ; define constante representando o baud rate da comunicação UART em 9600bps
+     9:                     ; UBRR_VAL = (f_clk/(16*baud_rate)) - 1
+    10: 
+    11: 
+    12: 
+    13: ;////////////// CONFIGURAÇÕES /////////////////////////////////
+    14: 
+    15: ;Inicialização SP
+    16: 000000   EF0F  ldi     R16,LOW(RAMEND)
+    17: 000001   BF0D  out     SPL,R16
+    18: 000002   E008  ldi     R16,HIGH(RAMEND)
+    19: 000003   BF0E  out     SPH,R16
+    20: 
+    21: ;Configura porta B como saída para exibir o caracter recebido
+    22: 000004   EF0F  ser     r16
+    23: 000005   B904  out     DDRB,r16; configura todos os pinos da porta B como saída
+    24: 000006   2700  clr     r16
+    25: 000007   B905  out     PORTB,r16
+    26: 
+    27: ;Inicialização comunicação USART
+    28: 
+    29: ;Configuração baud rate (taxa de comunicação -> 9,6 kbps)
+    30: 000008   E000  ldi     r16,HIGH(UBRR_VAL)
+    31: 000009   9300  sts     UBRR0H,r16
+        00000A   00C5
+    32: 00000B   E607  ldi     r16,LOW(UBRR_VAL)
+    33: 00000C   9300  sts     UBRR0L,r16
+        00000D   00C4
+    34: 
+    35: ;Habilitação do RX do UART0
+    36: 00000E   E100  ldi     r16,(1<<RXEN0);Criação de máscara que seta '1' na posição do bit RXEN0
+    37: 00000F   9300  sts     UCSR0B,r16
+        000010   00C1
+    38: 
+    39: ;Configuração do formato do frame de comunicação
+    40: 000011   E006  ldi     r16,(1<<UCSZ01) | (1<<UCSZ00)
+    41: 000012   9300  sts     UCSR0C,r16;Seta os bits 2:1, definindo tamanho de caracter para 8 bits
+        000013   00C2
+    42:                   ;Configura modo assíncrono (bit7:bit6 = 00)
+    43:                   ;Modo de paridade desabilitado (bit5:bit4 = 00)
+    44: 
+    45: ;///////////////////// MAIN ///////////////////////////////
+    46: 
+    47: ;Loop que aguarda chegar alguma instrução do controle bluetooth
+    48: 
+    49: main:
+    50: 000014   9100  lds     r16,UCSR0A
+        000015   00C0
+    51: 000016   FF07  sbrs    r16, RXC0     ;Pula para a leitura do dado caso haja dados no buffer a serem lidos (RXC0 set) -> Pode gerar interrupção
+    52: 000017   CFFC  rjmp    main         ;Reinicia
+    53: 
+    54: ; Captura flags de erro ANTES de ler UDR0.
+    55: ; A leitura de UDR0 apaga FE0 / DOR0 / UPE0 em UCSR0A,
+    56: ; então é preciso salvá-las enquanto r16 ainda contém UCSR0A.
+    57: 000018   2F20  mov     r18, r16
+    58: 000019   712C  andi    r18, (1<<FE0) | (1<<DOR0) | (1<<UPE0)
+    59: 
+    60: ;Trocar por vetor de interrupção USART_RXC
+    61: ;Leitura do dado
+    62: 00001A   9110  lds     r17,UDR0      ;Registrador que armazena o dado recebido por RX0
+        00001B   00C6
+    63: 
+    64: ;Se houve erro de frame / overrun / paridade: descarta o byte
+    65: 00001C   2322  tst     r18
+    66: 00001D   F7B1  brne    main
+    67: 
+    68: ; Filtra caracteres de controle ASCII (valor < 0x20)
+    69: 00001E   3210  cpi     r17, 0x20
+    70: 00001F   F3A0  brlo    main           ; descarta sem atualizar PORTB
+    71: 
+    72: ; Exibe apenas os 6 bits inferiores nos LEDs PB0–PB5
+    73: 000020   731F  andi    r17, 0x3F
+    74: 000021   B915  out     PORTB, r17
+    75: 000022   CFF1  rjmp    main
+    76: 
+
+List of symbols:
+Type nDef nUsed             Decimalval           Hexval Name
+  T     1     1                    171               AB ATMEGA328P
+  L     1     8                     20               14 MAIN
+  C     1     0                     26               1A NOW_Y
+  C     1     0                      6               06 NOW_M
+  C     1     0                     24               18 NOW_D
+  C     1     0                  46197             B475 NOW_I
+  C     1     2                    103               67 UBRR_VAL
+   No macros.
+
+Program             :       35 words.
+Constants           :        0 words.
+Total program memory:       35 words.
+Eeprom space        :        0 bytes.
+Data segment        :        0 bytes.
+Compilation completed, no errors.
+Compilation ended 24.06.2026, 13:02:25

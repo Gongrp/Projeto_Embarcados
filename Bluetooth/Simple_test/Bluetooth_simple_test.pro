@@ -1,0 +1,13 @@
+/avr_sim_project_file
+C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\Bluetooth\Simple_test\Bluetooth_simple_test.asm
+mainasm=Bluetooth_simple_test.asm
+file=Bluetooth_simple_test.lst,1,1,1
+file=Bluetooth_simple_test.asm,43,1,76
+clock=1000000
+device-type=ATmega328P
+device-package=28-pin-PDIP
+windows=acepstwz
+alert1=0,0,-1,-1,,0,0
+adcvref=5.0000
+adcvop=5.0000
+adcch=0.0000,0.0000,0.0000,0.0000,0.0000,0.0000

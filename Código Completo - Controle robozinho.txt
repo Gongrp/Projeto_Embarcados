@@ -1,0 +1,172 @@
+;Código Completo - Controle de robozinho motorizado -  ATmega328P @ 16 MHz
+
+;FUNCIONAMENTO:
+
+- Robozinho começa a andar para a frente assim que é ligado, na velocidade padrão.
+
+
+.include "m328Pdef.inc"
+
+;///////////////// CONSTANTES E PINAGEM ///////////////////////
+
+;OBS.: PODEMOS REDEFINIR OS PARÂMETROS AQUI FACILMENTE, SEM MEXER NO CORPO DO CÓDIGO
+
+
+; Ponte-H ESQUERDA (Motor E)         Ponte-H DIREITA (Motor D)
+;   PD2 = IN1 (E)                      PD4 = IN1 (D)
+;   PD3 = IN2 (E)                      PD5 = IN2 (D)
+
+; Convencao por roda: IN1=1,IN2=0 -> "frente"  |  IN1=0,IN2=1 -> "tras"
+
+.equ LIN1 = PD2
+.equ LIN2 = PD3   
+.equ RIN1 = PD4
+.equ RIN2 = PD5
+.equ PWM_PIN = PD6 ; PWM VELOCIDADE (saida OC0A do Timer0) -> ligar FISICAMENTE em ENA E ENB
+
+; SENSOR ULTRASSÔNICO
+
+.equ TRIG = PB4
+.equ ECHO = PB3
+
+;COMUNICAÇÃO USART MÓDULO BLUETOOTH
+
+.equ RX = PD0
+.equ TX = PD1
+
+
+;MODOS DE VELOCIDADE DO MOTOR
+
+.equ DUTY_SLOW = 90       ; ~35%
+.equ DUTY_STD  = 160      ; ~63%
+.equ DUTY_FAST = 255      ; 100%
+
+;Delay de rotação dos motores -> 300 microsseg
+.que ROT_DELAY = 4687 ;Número de contagens com PS de 1024 
+
+
+;Baud rate comunicação USART:
+
+;Distância de alcance sensor
+.equ    LIMIAR_CM = 10 
+
+
+;////////////// VETORES DE INTERRUPÇÃO ///////////////////////////////
+
+.cseg
+.org 0x0000
+rjmp config: ;Pula para a SR de configuração
+
+;Incluir interrupções para os timers 0 e 2?
+
+.org 0x0016
+rjmp INT_TIMER1_COMPA
+
+.org 0x0024
+rjmp INT_RX_USART
+
+.org 0x0034
+config:
+
+;////////////// CONFIGURAÇÕES INICIAIS //////////////////////////
+
+
+;Inicializando SP
+ldi     R16,LOW(RAMEND)
+out     SPL,R16
+ldi     R16,HIGH(RAMEND)
+out     SPH,R16
+
+;Configuração das portas
+
+;PORTD:
+ldi r16, (1<<LIN1)|(1<<LIN2)|(1<<RIN1)|(1<<RIN2)|(1<<PWM_PIN)
+out DDRD, r16
+clr r16
+out PORTD, r16
+;Define todos os pinos dos motores como saída, zera os valores nas portas
+
+;PORTB:
+ldi r16, (1<<TRIG)
+out DDRB,r16
+clr r16
+out PORTD,r16
+;Define o pino do TRIG como saída e o do ECHO como entrada, zera os valores nas portas
+
+;Configuração dos timers
+
+;TIMER0 -> PWM velocidade dos motores
+
+ldi r16, (1<<COM0A1)|(1<<WGM01)|(1<<WGM00)
+out TCCR0A,r16                              ;Configura timer0 no modo fast pwm, conecta comparador A no modo não inversor
+ldi r16, (1<<CS01)|(1<<CS00)
+out TCCR0B,r16				    ;Configura PS 64
+;Velocidade inicial??
+
+;TIMER1 -> Delay de rotação do motor
+ldi r16, (1<<COM0A1)|(1<<WGM11)
+sts TCCR1A,r16                  ;Configura timer 1 no modo CTC conectando comparador A no modo não inversor
+ldi r16, (1<<CS12)|(1<<CS10)
+sts TCCR1B,r16			;Configura PS 1024 (talvez só na hora de ativar, para aliviar o processamento?)
+ldi r16, low(ROT_DELAY)
+sts OCR1AL,r16
+ldi r16, high(ROT_DELAY)
+sts OCR1AH,r16			;Salva no comparador o número de contagens definido pelo delay desejado
+
+
+;TIMER2 -> Detecção do sensor ultrassônico (tempo entre emissão no TRIG e recepção no ECHO)
+
+ldi r16,0x00
+sts TCCR2A,r16 ;Configura timer 2 no modo normal (delay)
+ldi r16, (1<<CS21)
+sts TCCR2B,r16     ;Configura PS8
+
+;Configuração das interrupções:
+
+
+
+
+;
+
+;Configuração da comunicação USART
+
+
+;
+
+;Inicialização dos motores em velocidade padrão
+
+ldi r16, DUTY_STD
+out OCR0A,r16		;Define duty cycle inicial dos motores
+
+in r16, PORTB
+ori r16, (1<<
+
+
+;////////////////// CÓDIGO PRINCIPAL ///////////////////////////////
+
+;loop principal
+main:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

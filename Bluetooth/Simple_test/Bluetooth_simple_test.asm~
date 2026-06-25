@@ -73,3 +73,4 @@ brlo    main           ; descarta sem atualizar PORTB
 andi    r17, 0x3F
 out     PORTB, r17
 rjmp    main
+
