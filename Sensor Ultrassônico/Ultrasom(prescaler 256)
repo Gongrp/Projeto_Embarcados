@@ -1,0 +1,261 @@
+; ============================================================
+; PROJETO: CARRINHO AUTÔNOMO - HC-SR04 COM TIMER2 (PRESCALER 256)
+; MCU    : ATmega328P @ 16MHz
+;
+; LIGAÇÕES:
+;   TRIG -> PD2 (pino digital 2)
+;   ECHO -> PD3 (pino digital 3)
+;   LED  -> PD4 (pino digital 4)
+;
+; CONFIGURAÇÃO DO TIMER2:
+;   - Prescaler 256 (CS22=1, CS21=1, CS20=0)
+;   - 1 tick = 16µs
+;   - Fórmula: cm = (TCNT2 * 10) / 36
+;   - Alcance máximo: ~70cm
+; ============================================================
+
+.include "m328Pdef.inc"
+
+.def    TEMP1   = R16
+.def    TEMP2   = R17
+.def    DIST_CM = R20
+
+.equ    TRIG = 2             ; PD2
+.equ    ECHO = 3             ; PD3
+.equ    LED  = 4             ; PD4
+.equ    LIMIAR_CM = 10       ; distância para detectar (cm)
+
+; ============================================================
+; VARIÁVEIS NA SRAM
+; ============================================================
+.dseg
+.org 0x0100
+ESTADO_LED:     .byte 1      ; 0=apagado, 1=aceso
+
+; ============================================================
+; VETOR DE RESET
+; ============================================================
+.cseg
+.org    0x0000
+        rjmp    INICIO
+
+; ============================================================
+; CONFIGURAÇÃO INICIAL
+; ============================================================
+INICIO:
+        ; --- Pilha ---
+        ldi     TEMP1, low(RAMEND)
+        out     SPL, TEMP1
+        ldi     TEMP1, high(RAMEND)
+        out     SPH, TEMP1
+
+        ; --- Pinos ---
+        sbi     DDRD, TRIG          ; TRIG = saída
+        cbi     DDRD, ECHO          ; ECHO = entrada
+        sbi     DDRD, LED           ; LED = saída
+
+        cbi     PORTD, TRIG         ; TRIG inicia em 0
+        cbi     PORTD, LED          ; LED inicia apagado
+
+        ; --- Inicializa variável ---
+        clr     TEMP1
+        sts     ESTADO_LED, TEMP1
+
+        ; --- Timer2 em modo normal (prescaler desligado) ---
+        clr     TEMP1
+        sts     TCCR2A, TEMP1
+        sts     TCCR2B, TEMP1
+
+; ============================================================
+; LOOP PRINCIPAL
+; ============================================================
+LOOP_PRINCIPAL:
+        rcall   DISPARA_TRIGGER
+        rcall   ESPERA_ECHO_SUBIR
+        brcs    SEM_ECO              ; Carry=1 = timeout
+
+        rcall   CRONOMETRA_ECHO
+        rcall   CONVERTE_PARA_CM
+        rjmp    AVALIA_DISTANCIA
+
+SEM_ECO:
+        ldi     DIST_CM, 0xFF        ; valor alto = "sem obstáculo"
+
+AVALIA_DISTANCIA:
+        rcall   ATUALIZA_LED
+
+        ; Pausa entre medições (evita saturar o sensor)
+        ldi     TEMP1, 80            ; 80ms
+        rcall   ESPERA_MS
+
+        rjmp    LOOP_PRINCIPAL
+
+; ============================================================
+; DISPARA_TRIGGER - Gera pulso de 10us no TRIG
+; ============================================================
+DISPARA_TRIGGER:
+        sbi     PORTD, TRIG
+        ldi     TEMP1, 50
+PULSO_TRIG:
+        nop
+        nop
+        dec     TEMP1
+        brne    PULSO_TRIG
+        cbi     PORTD, TRIG
+        ret
+
+; ============================================================
+; ESPERA_ECHO_SUBIR - Aguarda ECHO = 1 (com timeout)
+; Retorna: Carry=1 se timeout, Carry=0 se sucesso
+; ============================================================
+ESPERA_ECHO_SUBIR:
+        ldi     TEMP2, 0xFF          ; timeout (255 iterações)
+LACO_ESPERA_SUBIDA:
+        sbic    PIND, ECHO
+        rjmp    ECHO_SUBIU_OK
+        dec     TEMP2
+        brne    LACO_ESPERA_SUBIDA
+        sec                          ; timeout
+        ret
+
+ECHO_SUBIU_OK:
+        clc                          ; sucesso
+        ret
+
+; ============================================================
+; CRONOMETRA_ECHO - Mede o tempo que ECHO fica em 1
+; Timer2 com prescaler 256: 1 tick = 16µs
+; Resultado em DIST_CM (valor bruto em ticks)
+; ============================================================
+CRONOMETRA_ECHO:
+        ; Zera Timer2
+        clr     TEMP1
+        sts     TCNT2, TEMP1
+
+        ; Liga Timer2 com prescaler 256 (CS22=1, CS21=1, CS20=0)
+        ldi     TEMP1, (1<<CS22) | (1<<CS21)
+        sts     TCCR2B, TEMP1
+
+        ; Timeout para não travar (evita loop infinito)
+        ldi     TEMP2, 0xFF
+
+ESPERA_ECHO_DESCER:
+        sbis    PIND, ECHO          ; se ECHO=0, sai do loop
+        rjmp    ECHO_DESCEU_OK
+        dec     TEMP2
+        brne    ESPERA_ECHO_DESCER
+
+        ; TIMEOUT: para o timer e retorna distância máxima
+        clr     TEMP1
+        sts     TCCR2B, TEMP1
+        ldi     DIST_CM, 0xFF
+        ret
+
+ECHO_DESCEU_OK:
+        ; Para o Timer2
+        clr     TEMP1
+        sts     TCCR2B, TEMP1
+
+        ; Lê TCNT2 (8 bits, 0-255)
+        lds     DIST_CM, TCNT2
+        ret
+
+; ============================================================
+; CONVERTE_PARA_CM - Converte ticks para centímetros
+; Fórmula: cm = (TCNT2 * 10) / 36
+; Exemplo: 36 ticks = 10cm, 72 ticks = 20cm
+; ============================================================
+CONVERTE_PARA_CM:
+        push    TEMP1
+        push    TEMP2
+
+        mov     TEMP1, DIST_CM      ; TEMP1 = ticks (0-255)
+        
+        ; Multiplica por 10 (TEMP1 * 10)
+        lsl     TEMP1               ; *2
+        mov     TEMP2, TEMP1        ; TEMP2 = *2
+        lsl     TEMP1               ; *4
+        lsl     TEMP1               ; *8
+        add     TEMP1, TEMP2        ; *8 + *2 = *10
+        ; TEMP1 = ticks * 10 (0-2550)
+
+        ; Divide por 36 (subtração repetida)
+        clr     DIST_CM
+DIV_LOOP:
+        cpi     TEMP1, 36
+        brlo    DIV_FIM
+        subi    TEMP1, 36
+        inc     DIST_CM
+        rjmp    DIV_LOOP
+DIV_FIM:
+
+        pop     TEMP2
+        pop     TEMP1
+        ret
+
+; ============================================================
+; ATUALIZA_LED - Com histerese para evitar oscilação
+; Acende se DIST_CM < LIMIAR_CM (10cm)
+; Apaga se DIST_CM > LIMIAR_CM + 2 (12cm)
+; ============================================================
+ATUALIZA_LED:
+        push    TEMP1
+        lds     TEMP1, ESTADO_LED
+
+        ; Se distância < limite, acende
+        cpi     DIST_CM, LIMIAR_CM
+        brsh    TESTA_LONGE
+
+        ; OBSTÁCULO DETECTADO
+        sbi     PORTD, LED
+        ldi     TEMP1, 1
+        sts     ESTADO_LED, TEMP1
+        rjmp    FIM_LED
+
+TESTA_LONGE:
+        ; Se já estava apagado, mantém apagado
+        cpi     TEMP1, 1
+        brne    LED_APAGADO
+
+        ; Estava aceso: só apaga se distância > LIMIAR_CM + 2
+        mov     TEMP1, DIST_CM
+        subi    TEMP1, LIMIAR_CM
+        cpi     TEMP1, 2
+        brlo    FIM_LED             ; ainda perto, mantém aceso
+
+LED_APAGADO:
+        cbi     PORTD, LED
+        clr     TEMP1
+        sts     ESTADO_LED, TEMP1
+
+FIM_LED:
+        pop     TEMP1
+        ret
+
+; ============================================================
+; ESPERA_MS - Delay em milissegundos (aproximado)
+; Entrada: TEMP1 = número de ms (0-255)
+; ============================================================
+ESPERA_MS:
+        push    TEMP1
+        push    TEMP2
+        push    TEMP3
+LOOP_MS:
+        ldi     TEMP2, 4
+LOOP_4:
+        ldi     TEMP3, 250
+LOOP_250:
+        dec     TEMP3
+        brne    LOOP_250
+        dec     TEMP2
+        brne    LOOP_4
+        dec     TEMP1
+        brne    LOOP_MS
+        pop     TEMP3
+        pop     TEMP2
+        pop     TEMP1
+        ret
+
+; ============================================================
+; FIM DO PROGRAMA
+; ============================================================
