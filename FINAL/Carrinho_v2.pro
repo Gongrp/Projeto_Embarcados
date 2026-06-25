@@ -1,8 +1,7 @@
 /avr_sim_project_file
-C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\FINAL\Carrinho_final.asm
-mainasm=Carrinho_final.asm
-file=Carrinho_final.lst,1,81,38
-file=Carrinho_final.asm,373,12,411
+C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\FINAL\Carrinho_v2.asm
+mainasm=Carrinho_v2.asm
+file=Carrinho_v2.asm,1,1,1
 clock=1000000
 device-type=ATmega328P
 device-package=28-pin-PDIP

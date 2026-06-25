@@ -5,7 +5,7 @@ Path:        C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\FINAL\
 Source file: Carrinho_final.asm
 Hex file:    Carrinho_final.hex
 Eeprom file: Carrinho_final.eep
-Compiled:    25.06.2026, 09:47:09
+Compiled:    25.06.2026, 17:08:28
 Pass:        2
 
      1: ;Código Completo - Controle de robozinho motorizado -  ATmega328P @ 16 MHz
@@ -56,7 +56,7 @@ Pass:        2
     43: .equ DUTY_STD  = 160      ; ~63%
     44: .equ DUTY_FAST = 255      ; 100%
     45: 
-    46: ;Delay de rotação dos motores
+    46: ;Delay de rotação dos motores  (400ms)
     47: .equ ROT_DELAY = 6250 		;Número de contagens com PS de 1024 -> N = T_DELAY(s) * (16M/PS)
     48: 
     49: 
@@ -68,391 +68,406 @@ Pass:        2
     55: ;Variável de controle de mudanças de direção realizadas (incrementada a cada rotação sucessiva e é zerado quando o carro pode seguir em frente)
     56: .def ROT_COUNT = r22
     57: 
-    58: 
-    59: ;////////////// VETORES DE INTERRUPÇÃO ///////////////////////////////
+    58: ;Variável de registro de ocorrência de interrupção do comparadorA
+    59: .def TIMER1_FLAG = r21
     60: 
-    61: .cseg
-    62: .org 0x0000
-    63: 000000   C033  rjmp config ;Pula para a SR de configuração
-    64: 
-    65: ;Incluir interrupções para os timers 0 e 2?
-    66: 
-    67: .org 0x0016
-    68: 000016   C0C1  rjmp INT_TIMER1_COMPA
+    61: 
+    62: ;////////////// VETORES DE INTERRUPÇÃO ///////////////////////////////
+    63: 
+    64: .cseg
+    65: .org 0x0000
+    66: 000000   C033  rjmp config ;Pula para a SR de configuração
+    67: 
+    68: ;Incluir interrupções para os timers 0 e 2?
     69: 
-    70: .org 0x0024
-    71: 000024   C0B5  rjmp INT_RX_USART
+    70: .org 0x0016
+    71: 000016   C0CA  rjmp INT_TIMER1_COMPA
     72: 
-    73: .org 0x0034
-    74: 
+    73: .org 0x0024
+    74: 000024   C0BE  rjmp INT_RX_USART
     75: 
-    76: ;////////////// CONFIGURAÇÕES INICIAIS //////////////////////////
-    77: 
-    78: config:
-    79: 
-    80: ;Inicializando SP
-    81: 000034   EF0F  ldi     R16,LOW(RAMEND)
-    82: 000035   BF0D  out     SPL,R16
-    83: 000036   E008  ldi     R16,HIGH(RAMEND)
-    84: 000037   BF0E  out     SPH,R16
-    85: 
-    86: ;Configurações iniciais de registradores
+    76: 
+    77: ;////////////// CONFIGURAÇÕES INICIAIS //////////////////////////
+    78: 
+    79: .org 0x0034
+    80: config:
+    81: 
+    82: ;Inicializando SP
+    83: 000034   EF0F  ldi     R16,LOW(RAMEND)
+    84: 000035   BF0D  out     SPL,R16
+    85: 000036   E008  ldi     R16,HIGH(RAMEND)
+    86: 000037   BF0E  out     SPH,R16
     87: 
-    88: ;Constante de comparação para sinalizar ativação de interrupts
-    89: 000038   E001  ldi r16, 0x01
-    90: 000039   2EC0  mov r12, r16
-    91: 
-    92: 00003A   2766  clr ROT_COUNT ;Inicia a contagem de rotações em zero
+    88: ;Configurações iniciais de registradores
+    89: 
+    90: ;Constante de comparação para sinalizar ativação de interrupts
+    91: 000038   E001  ldi r16, 0x01
+    92: 000039   2EC0  mov r12, r16
     93: 
-    94: 
-    95: ;Configuração das portas
+    94: 00003A   2766  clr ROT_COUNT ;Inicia a contagem de rotações em zero
+    95: 
     96: 
-    97: ;PORTD:
-    98: 00003B   E70C  ldi r16, (1<<LIN1)|(1<<LIN2)|(1<<RIN1)|(1<<RIN2)|(1<<PWM_PIN)
-    99: 00003C   B90A  out DDRD, r16
-   100: 00003D   2700  clr r16
-   101: 00003E   B90B  out PORTD, r16
-   102: ;Define todos os pinos dos motores como saída, zera os valores nas portas
-   103: 
-   104: ;PORTB:
-   105: 00003F   E100  ldi r16, (1<<TRIG)
-   106: 000040   B904  out DDRB,r16
-   107: 000041   2700  clr r16
-   108: 000042   B90B  out PORTD,r16
-   109: ;Define o pino do TRIG como saída e o do ECHO como entrada, zera os valores nas portas
-   110: 
-   111: ;Configuração dos timers
+    97: ;Configuração das portas
+    98: 
+    99: ;PORTD:
+   100: 00003B   E70C  ldi r16, (1<<LIN1)|(1<<LIN2)|(1<<RIN1)|(1<<RIN2)|(1<<PWM_PIN)
+   101: 00003C   B90A  out DDRD, r16
+   102: 00003D   2700  clr r16
+   103: 00003E   B90B  out PORTD, r16
+   104: ;Define todos os pinos dos motores como saída, zera os valores nas portas
+   105: 
+   106: ;PORTB:
+   107: 00003F   E100  ldi r16, (1<<TRIG)
+   108: 000040   B904  out DDRB,r16
+   109: 000041   2700  clr r16
+   110: 000042   B905  out PORTB,r16
+   111: ;Define o pino do TRIG como saída e o do ECHO como entrada, zera os valores nas portas
    112: 
-   113: ;TIMER0 -> PWM velocidade dos motores
+   113: ;Configuração dos timers
    114: 
-   115: 000043   E803  ldi r16, (1<<COM0A1)|(1<<WGM01)|(1<<WGM00)
-   116: 000044   BD04  out TCCR0A,r16                              ;Configura timer0 no modo fast pwm, conecta comparador A no modo não inversor
-   117: 000045   E003  ldi r16, (1<<CS01)|(1<<CS00)
-   118: 000046   BD05  out TCCR0B,r16				    ;Configura PS 64
-   119: ;Velocidade inicial??
-   120: 
-   121: 
-   122: ;TIMER1 -> Delay de rotação do motor
+   115: ;TIMER0 -> PWM velocidade dos motores
+   116: 
+   117: 000043   E803  ldi r16, (1<<COM0A1)|(1<<WGM01)|(1<<WGM00)
+   118: 000044   BD04  out TCCR0A,r16                              ;Configura timer0 no modo fast pwm, conecta comparador A no modo não inversor
+   119: 000045   E003  ldi r16, (1<<CS01)|(1<<CS00)
+   120: 000046   BD05  out TCCR0B,r16				    ;Configura PS 64
+   121: ;Velocidade inicial??
+   122: 
    123: 
-   124: 000047   E802  ldi r16, (1<<COM0A1)|(1<<WGM11)
-   125: 000048   9300  sts TCCR1A,r16                  ;Configura timer 1 no modo CTC conectando comparador A no modo não inversor
+   124: ;TIMER1 -> Delay de rotação do motor
+   125: 
+   126: ;ldi r16, (1<<COM1A1)|(1<<WGM11)
+   127: 000047   2700  clr r16
+   128: 000048   9300  sts TCCR1A,r16                  ;Configura timer 1 no modo CTC conectando comparador A no modo não inversor
         000049   0080
-   126: 00004A   2700  clr r16
-   127: 00004B   9300  sts TCCR1B,r16			;Timer inicia desativado
+   129: 00004A   E008  ldi r16, (1<<WGM12)
+   130: 00004B   9300  sts TCCR1B,r16			            ;Timer inicia desativado
         00004C   0081
-   128: 00004D   E60A  ldi r16, low(ROT_DELAY)
-   129: 00004E   9300  sts OCR1AL,r16
+   131: 00004D   E60A  ldi r16, low(ROT_DELAY)
+   132: 00004E   9300  sts OCR1AL,r16
         00004F   0088
-   130: 000050   E108  ldi r16, high(ROT_DELAY)
-   131: 000051   9300  sts OCR1AH,r16			;Salva no comparador o número de contagens definido pelo delay desejado -> Determina ângulo de rotação
+   133: 000050   E108  ldi r16, high(ROT_DELAY)
+   134: 000051   9300  sts OCR1AH,r16			;Salva no comparador o número de contagens definido pelo delay desejado -> Determina ângulo de rotação
         000052   0089
-   132: 
-   133: 
-   134: ;TIMER2 -> Detecção do sensor ultrassônico (tempo entre emissão no TRIG e recepção no ECHO)
    135: 
-   136: 000053   E000  ldi r16,0x00
-   137: 000054   9300  sts TCCR2A,r16 	   ;Configura timer 2 no modo normal (delay)
+   136: 
+   137: ;TIMER2 -> Detecção do sensor ultrassônico (tempo entre emissão no TRIG e recepção no ECHO)
+   138: 
+   139: 000053   E000  ldi r16,0x00
+   140: 000054   9300  sts TCCR2A,r16 	   ;Configura timer 2 no modo normal (delay)
         000055   00B0
-   138: 000056   9300  sts TCCR2B,r16     ;Timer2 inicia desativado
+   141: 000056   9300  sts TCCR2B,r16     ;Timer2 inicia desativado
         000057   00B1
-   139: 
-   140: ;Configuração das interrupções:
-   141: 
-   142: ;Interrupt do timer 1
-   143: 000058   E002  ldi r16, (1<<OCIE1A)
-   144: 000059   9300  sts TIMSK1,r16
+   142: 
+   143: ;Configuração das interrupções:
+   144: 
+   145: ;Interrupt do timer 1
+   146: 000058   E002  ldi r16, (1<<OCIE1A)
+   147: 000059   9300  sts TIMSK1,r16
         00005A   006F
-   145: 
-   146: ;OBS. configurar demais interrupções
-   147: 
-   148: 00005B   9478  sei
-   149: ;
+   148: 
+   149: ;OBS. configurar demais interrupções
    150: 
-   151: ;Configuração da comunicação USART
-   152: 
+   151: 00005B   9478  sei
+   152: ;
    153: 
-   154: ;OBS. preencher depois
+   154: ;Configuração da comunicação USART
    155: 
-   156: ;Inicialização dos motores em velocidade padrão
-   157: 
-   158: 00005C   EA00  ldi r16, DUTY_STD
-   159: 00005D   BD07  out OCR0A,r16		;Define duty cycle inicial dos motores
+   156: 
+   157: ;OBS. preencher depois
+   158: 
+   159: ;Inicialização dos motores em velocidade padrão
    160: 
-   161: 00005E   D05C  rcall RUN_MOTORS	;Inicia movimento para frente
-   162: 
+   161: 00005C   EA00  ldi r16, DUTY_STD
+   162: 00005D   BD07  out OCR0A,r16		;Define duty cycle inicial dos motores
    163: 
-   164: ;////////////////// CÓDIGO PRINCIPAL ///////////////////////////////
+   164: 00005E   D05F  rcall RUN_MOTORS	;Inicia movimento para frente
    165: 
-   166: ;loop principal -> Realiza o processo de medição com o sensor ultrassônico e determina se o carrinho deve mudar de direção
-   167: 
-   168: main:
-   169: 
-   170: ;OBS.: INCORPORAR DEPOIS FILTRO MÉDIA MÓVEL PARA AS MEDIDAS DO ULTRASSONICO
-   171: 00005F   D00A  rcall   DISPARA_TRIGGER
-   172: 000060   D011  rcall   ESPERA_ECHO_SUBIR
-   173: 000061   F018  brcs    SEM_ECO              ; carry=1 -> sensor não respondeu
-   174: 
-   175: 000062   D018  rcall   CRONOMETRA_ECHO
-   176: ;rcall   CONVERTE_PARA_CM   ;Com PS 1024, valor do delay do echo é ~ distância em cm
-   177: 000063   D02D  rcall   AVALIA_DISTANCIA
-   178: 000064   C002  rjmp 	COOLDOWN
-   179: 
-   180: SEM_ECO:
-   181: 000065   EF4F  ldi     r20, 0xFF        ; valor alto = "livre"
-   182: 000066   D02A  rcall AVALIA_DISTANCIA
-   183: 
-   184: COOLDOWN:
-   185: ; pausa entre medições (~80ms, recomendado pelo datasheet)
-   186: 000067   E500  ldi     r16, 80
-   187: 000068   D043  rcall   ESPERA_MS
-   188: 
-   189: 000069   CFF5  rjmp   main; Reinicia loop principal
-   190: 
+   166: 
+   167: ;////////////////// CÓDIGO PRINCIPAL ///////////////////////////////
+   168: 
+   169: ;loop principal -> Realiza o processo de medição com o sensor ultrassônico e determina se o carrinho deve mudar de direção
+   170: 
+   171: main:
+   172: 
+   173: ;OBS.: INCORPORAR DEPOIS FILTRO MÉDIA MÓVEL PARA AS MEDIDAS DO ULTRASSONICO
+   174: 00005F   D00A  rcall   DISPARA_TRIGGER
+   175: 000060   D011  rcall   ESPERA_ECHO_SUBIR
+   176: 000061   F018  brcs    SEM_ECO              ; carry=1 -> sensor não respondeu
+   177: 
+   178: 000062   D018  rcall   CRONOMETRA_ECHO
+   179: ;rcall   CONVERTE_PARA_CM   ;Com PS 1024, valor do delay do echo é ~ distância em cm
+   180: 000063   D02E  rcall   AVALIA_DISTANCIA
+   181: 000064   C002  rjmp 	COOLDOWN
+   182: 
+   183: SEM_ECO:
+   184: 000065   EF4F  ldi     r20, 0xFF        ; valor alto = "livre"
+   185: 000066   D02B  rcall AVALIA_DISTANCIA
+   186: 
+   187: COOLDOWN:
+   188: ; pausa entre medições (~80ms, recomendado pelo datasheet)
+   189: 000067   E500  ldi     r16, 80
+   190: 000068   D046  rcall   ESPERA_MS
    191: 
-   192: 
-   193: ;////////////////////// SUB-ROTINAS //////////////////////////////////
+   192: 000069   CFF5  rjmp   main; Reinicia loop principal
+   193: 
    194: 
-   195: DISPARA_TRIGGER:
-   196: 00006A   9A2C  sbi     PORTB, TRIG
-   197: ;10us a 16MHz = 160 ciclos de clock
-   198: 00006B   E312  ldi     r17, 50
-   199: 
-   200: PULSO_TRIG: ;Aguarda 10 microsseg com TRIG em HIGH (implementado com decremento)
-   201: 00006C   0000  nop
-   202: 00006D   0000  nop
-   203: 00006E   951A  dec     r17
-   204: 00006F   F7E1  brne    PULSO_TRIG
-   205: 000070   982C  cbi     PORTB, TRIG
-   206: 000071   9508  ret
-   207: 
-   208: 
-   209: ; Aguarda o pino ECHO ir para nível alto.
-   210: ; Retorna: Carry = 1 se houve timeout (sem resposta do sensor)
-   211: ;          Carry = 0 se ECHO subiu normalmente
-   212: 
-   213: ESPERA_ECHO_SUBIR:
-   214: 000072   2722  clr r18           ; contador de timeout (256 voltas)
+   195: 
+   196: ;////////////////////// SUB-ROTINAS //////////////////////////////////
+   197: 
+   198: DISPARA_TRIGGER:
+   199: 00006A   9A2C  sbi     PORTB, TRIG
+   200: ;10us a 16MHz = 160 ciclos de clock
+   201: 00006B   E312  ldi     r17, 50
+   202: 
+   203: PULSO_TRIG: ;Aguarda 10 microsseg com TRIG em HIGH (implementado com decremento)
+   204: 00006C   0000  nop
+   205: 00006D   0000  nop
+   206: 00006E   951A  dec     r17
+   207: 00006F   F7E1  brne    PULSO_TRIG
+   208: 000070   982C  cbi     PORTB, TRIG
+   209: 000071   9508  ret
+   210: 
+   211: 
+   212: ; Aguarda o pino ECHO ir para nível alto.
+   213: ; Retorna: Carry = 1 se houve timeout (sem resposta do sensor)
+   214: ;          Carry = 0 se ECHO subiu normalmente
    215: 
-   216: LACO_ESPERA_SUBIDA:
-   217: 000073   991B  sbic    PINB, ECHO    ; se ECHO=0, pula a próxima linha
-   218: 000074   C004  rjmp    ECHO_OK_SUBIU
-   219: 000075   952A  dec     r18
-   220: 000076   F7E1  brne    LACO_ESPERA_SUBIDA
-   221: ; esgotou o tempo
-   222: 000077   9408  sec                         ; seta carry = timeout
-   223: 000078   9508  ret
-   224: 
-   225: ECHO_OK_SUBIU:
-   226: 000079   9488  clc                         ; limpa carry = sucesso
-   227: 00007A   9508  ret
-   228: 
-   229: ; Usa Timer2 com PS de 1024 para contar quanto tempo o pino ECHO permanece em nível alto.
-   230: 
-   231: ;/////// CRONOMETRA_ECHO /////////////////////
-   232: 
-   233: CRONOMETRA_ECHO:
-   234: 00007B   2700  clr     r16
-   235: 00007C   9300  sts     TCNT2, r16
+   216: ESPERA_ECHO_SUBIR:
+   217: 000072   2722  clr r18           ; contador de timeout (256 voltas)
+   218: 
+   219: LACO_ESPERA_SUBIDA:
+   220: 000073   991B  sbic    PINB, ECHO    ; se ECHO=0, pula a próxima linha
+   221: 000074   C004  rjmp    ECHO_OK_SUBIU
+   222: 000075   952A  dec     r18
+   223: 000076   F7E1  brne    LACO_ESPERA_SUBIDA
+   224: ; esgotou o tempo
+   225: 000077   9408  sec                         ; seta carry = timeout
+   226: 000078   9508  ret
+   227: 
+   228: ECHO_OK_SUBIU:
+   229: 000079   9488  clc                         ; limpa carry = sucesso
+   230: 00007A   9508  ret
+   231: 
+   232: ; Usa Timer2 com PS de 1024 para contar quanto tempo o pino ECHO permanece em nível alto.
+   233: 
+   234: ;/////// CRONOMETRA_ECHO /////////////////////
+   235: 
+   236: CRONOMETRA_ECHO:
+   237: 00007B   2700  clr     r16
+   238: 00007C   9300  sts     TCNT2, r16
         00007D   00B2
-   236: 
-   237: ; Liga Timer2 com prescaler 1024 (CS22=1, CS21=1, CS20=1)
-   238: 00007E   E007  ldi     r16, (1<<CS22) | (1<<CS21) | (1<<CS20)
-   239: 00007F   9300  sts     TCCR2B, r16
+   239: 
+   240: ; Liga Timer2 com prescaler 1024 (CS22=1, CS21=1, CS20=1)
+   241: 00007E   E007  ldi     r16, (1<<CS22) | (1<<CS21) | (1<<CS20)
+   242: 00007F   9300  sts     TCCR2B, r16
         000080   00B1
-   240: 
-   241: ; Timeout para não travar
-   242: 000081   EF1F  ldi     r17, 0xFF
    243: 
-   244: ESPERA_ECHO_DESCER:
-   245: 000082   9B1B  sbis    PINB, ECHO
-   246: 000083   C007  rjmp    ECHO_DESCEU_OK
-   247: 
-   248: 000084   951A  dec     r17
-   249: 000085   F7E1  brne    ESPERA_ECHO_DESCER
-   250: 
-   251: ; TIMEOUT (executa esse bloco caso r17 chegue a zero)
-   252: 000086   2700  clr     r16
-   253: 000087   9300  sts     TCCR2B, r16 ;Para o timer2
-        000088   00B1
-   254: 000089   EF4F  ldi 	r20,0xFF 		;Armazena o valor medido de distância em r20 (0xFF -> Valor de erro de timeout)
-   255: 00008A   9508  ret
-   256: 
-   257: ECHO_DESCEU_OK:
-   258: 00008B   2700  clr     r16
-   259: 00008C   9300  sts     TCCR2B, r16 ;Para o timer2
-        00008D   00B1
-   260: 00008E   9140  lds     r20, TCNT2    ;Valor de tempo de demora da detecção será depois convertido em cm
-        00008F   00B2
-   261: 000090   9508  ret
-   262: 
-   263: 
-   264: ;/////////////////// TESTE DE DISTÂNCIA /////////////////////////////
+   244: 
+   245: ESPERA_ECHO_DESCER:
+   246: 000081   9B1B  sbis    PINB, ECHO
+   247: 000082   C009  rjmp    ECHO_DESCEU_OK
+   248: 
+   249: ;Controle de TIMEOUT: Verifica se o tempo estourou o limite
+   250: 000083   9100  lds     r16,TCNT2
+        000084   00B2
+   251: 000085   3F0A  cpi     r16,250  ;Compara o valor do timer2 com o limite de timeout
+   252: 000086   F3D0  brlo    ESPERA_ECHO_DESCER
+   253: 
+   254: ; TIMEOUT (executa esse bloco caso o timer chegue em 250 -> limite)
+   255: 000087   2700  clr     r16
+   256: 000088   9300  sts     TCCR2B, r16 ;Para o timer2
+        000089   00B1
+   257: 00008A   EF4F  ldi 	  r20,0xFF 		;Armazena o valor medido de distância em r20 (0xFF -> Valor de erro de timeout)
+   258: 00008B   9508  ret
+   259: 
+   260: ECHO_DESCEU_OK:
+   261: 00008C   2700  clr     r16
+   262: 00008D   9300  sts     TCCR2B, r16 ;Para o timer2
+        00008E   00B1
+   263: 00008F   9140  lds     r20, TCNT2    ;Valor de tempo de demora da detecção será depois convertido em cm
+        000090   00B2
+   264: 000091   9508  ret
    265: 
-   266: ;Compara distância em cm medida com o limiar definido para determinar se o carrinho deve rotacionar, e em qual sentido (dependendo das rotações anteriores)
-   267: ;Se estiver no meio de um processo de mudança de direção e não for detectado obstáculo, reinicia o movimento para frente
+   266: 
+   267: ;/////////////////// TESTE DE DISTÂNCIA /////////////////////////////
    268: 
-   269: AVALIA_DISTANCIA:
-   270: 000091   304A  cpi     r20, LIMIAR_CM
+   269: ;Compara distância em cm medida com o limiar definido para determinar se o carrinho deve rotacionar, e em qual sentido (dependendo das rotações anteriores)
+   270: ;Se estiver no meio de um processo de mudança de direção e não for detectado obstáculo, reinicia o movimento para frente
    271: 
-   272: ;Se o valor em r20 for MENOR que o limiar -> obstáculo detectado
-   273: 000092   F018  brlo    CHANGE_DIRECTION
+   272: AVALIA_DISTANCIA:
+   273: 000092   304A  cpi     r20, LIMIAR_CM
    274: 
-   275: ;Se não, limpa o registrador de rotações, reativa motores e volta ao loop principal
-   276: 000093   2766  clr ROT_COUNT
-   277: 000094   D026  rcall RUN_MOTORS
-   278: 000095   9508  ret
-   279: 
-   280: CHANGE_DIRECTION:
-   281: 000096   D029  rcall STOP_MOTORS
-   282: 000097   3060  cpi ROT_COUNT, 0x00
-   283: 000098   F031  breq ROTATION_1
-   284: 000099   3061  cpi ROT_COUNT, 0x01
-   285: 00009A   F039  breq ROTATION_2
-   286: 00009B   3062  cpi ROT_COUNT, 0x02
-   287: 00009C   F051  breq ROTATION_3
-   288: 00009D   C00C  rjmp END_ROT
-   289: 
-   290: ;Se já estiver com o ROT_COUNT em 0x03 (encontrou obstáculo voltando a de onde veio, fica parado até detectar uma abertura)
-   291: 00009E   9508  ret	;Sem incrementar o contador de rotações
-   292: 
-   293: 
-   294: ;Se ROT_COUNT for 0x00, segue no normal (ROTATION_1)
-   295: ROTATION_1:
-   296: ;Gira uma vez para a esquerda
-   297: 00009F   D02A  rcall TURN_LEFT
-   298: 0000A0   D02E  rcall WAIT_ROTATION
-   299: 0000A1   C008  rjmp END_ROT
-   300: 
-   301: ROTATION_2:
-   302: ;Gira duas vezes para a direita (sentido oposto da primeira rotação)
-   303: 0000A2   D022  rcall TURN_RIGHT
-   304: 0000A3   D02B  rcall WAIT_ROTATION
-   305: 0000A4   D020  rcall TURN_RIGHT
-   306: 0000A5   D029  rcall WAIT_ROTATION
-   307: 0000A6   C003  rjmp END_ROT
-   308: 
-   309: ROTATION_3:
-   310: ;Gira mais uma vez para a direita, se direcionando no sentido oposto do qual veio antes da primeira detecção de obstáculo
-   311: 0000A7   D01D  rcall TURN_RIGHT
-   312: 0000A8   D026  rcall WAIT_ROTATION
-   313: 0000A9   C000  rjmp END_ROT
-   314: 
-   315: 
-   316: END_ROT:
-   317: 0000AA   9563  inc ROT_COUNT		;Aumenta o número de rotações realizadas
-   318: 0000AB   9508  ret
+   275: ;Se o valor em r20 for MENOR que o limiar -> obstáculo detectado
+   276: 000093   F018  brlo    CHANGE_DIRECTION
+   277: 
+   278: ;Se não, limpa o registrador de rotações, reativa motores e volta ao loop principal
+   279: 000094   2766  clr ROT_COUNT
+   280: 000095   D028  rcall RUN_MOTORS
+   281: 000096   9508  ret
+   282: 
+   283: CHANGE_DIRECTION:
+   284: 000097   D02B  rcall STOP_MOTORS  ;OBS.: AVALIAR SE É NECESSÁRIO INSERIR DELAY PARA PARAR TOTALMENTE
+   285: 000098   3060  cpi ROT_COUNT, 0x00
+   286: 000099   F029  breq ROTATION_1
+   287: 00009A   3061  cpi ROT_COUNT, 0x01
+   288: 00009B   F039  breq ROTATION_2
+   289: 00009C   3062  cpi ROT_COUNT, 0x02
+   290: 00009D   F059  breq ROTATION_3
+   291: 
+   292: ;Se já estiver com o ROT_COUNT em 0x03 (encontrou obstáculo voltando a de onde veio, fica parado até detectar uma abertura)
+   293: 00009E   9508  ret	;Sem incrementar o contador de rotações
+   294: 
+   295: 
+   296: ;Se ROT_COUNT for 0x00, segue no normal (ROTATION_1)
+   297: ROTATION_1:
+   298: ;Gira uma vez para a esquerda
+   299: 00009F   D02D  rcall TURN_LEFT
+   300: 0000A0   D031  rcall WAIT_ROTATION
+   301: 0000A1   D021  rcall STOP_MOTORS
+   302: 0000A2   C00A  rjmp END_ROT
+   303: 
+   304: ROTATION_2:
+   305: ;Gira duas vezes para a direita (sentido oposto da primeira rotação)
+   306: 0000A3   D024  rcall TURN_RIGHT
+   307: 0000A4   D02D  rcall WAIT_ROTATION
+   308: 0000A5   D022  rcall TURN_RIGHT
+   309: 0000A6   D02B  rcall WAIT_ROTATION
+   310: 0000A7   D01B  rcall STOP_MOTORS
+   311: 0000A8   C004  rjmp END_ROT
+   312: 
+   313: ROTATION_3:
+   314: ;Gira mais uma vez para a direita, se direcionando no sentido oposto do qual veio antes da primeira detecção de obstáculo
+   315: 0000A9   D01E  rcall TURN_RIGHT
+   316: 0000AA   D027  rcall WAIT_ROTATION
+   317: 0000AB   D017  rcall STOP_MOTORS
+   318: 0000AC   C000  rjmp END_ROT
    319: 
    320: 
-   321: ;//////////// LOOP DE DELAY ENTRE MEDIÇÕES ////////////////////
-   322: 
-   323: ;Implementação de delay de cooldown do sensor ultrassônico por decremento
+   321: END_ROT:
+   322: 0000AD   9563  inc ROT_COUNT		;Aumenta o número de rotações realizadas
+   323: 0000AE   9508  ret
    324: 
-   325: ;OBS.: COGITAR ALTERAR PARA TIMER
-   326: 
-   327: ESPERA_MS:
-   328: 0000AC   930F  push    r16
-   329: 0000AD   931F  push    r17
-   330: 0000AE   932F  push    r18
-   331: LOOP_MS:
-   332: 0000AF   E014  ldi     r17, 4
-   333: LOOP_4:
-   334: 0000B0   EF2A  ldi     r18, 250
-   335: LOOP_250:
-   336: 0000B1   952A  dec     r18
-   337: 0000B2   F7F1  brne    LOOP_250
-   338: 0000B3   951A  dec     r17
-   339: 0000B4   F7D9  brne    LOOP_4
-   340: 0000B5   950A  dec     r16
-   341: 0000B6   F7C1  brne    LOOP_MS
-   342: 0000B7   912F  pop     r18
-   343: 0000B8   911F  pop     r17
-   344: 0000B9   910F  pop     r16
-   345: 0000BA   9508  ret
-   346: 
-   347: 
-   348: 
-   349: 
-   350: ;//////////////////// AÇÕES DOS MOTORES /////////////////////////////
+   325: 
+   326: ;//////////// LOOP DE DELAY ENTRE MEDIÇÕES ////////////////////
+   327: 
+   328: ;Implementação de delay de cooldown do sensor ultrassônico por decremento
+   329: 
+   330: ;OBS.: COGITAR ALTERAR PARA TIMER
+   331: 
+   332: ESPERA_MS:
+   333: 0000AF   930F  push    r16
+   334: 0000B0   931F  push    r17
+   335: 0000B1   932F  push    r18
+   336: LOOP_MS:
+   337: 0000B2   E118  ldi     r17, 24
+   338: LOOP_4:
+   339: 0000B3   EF2A  ldi     r18, 250
+   340: LOOP_250:
+   341: 0000B4   952A  dec     r18
+   342: 0000B5   F7F1  brne    LOOP_250
+   343: 0000B6   951A  dec     r17
+   344: 0000B7   F7D9  brne    LOOP_4
+   345: 0000B8   950A  dec     r16
+   346: 0000B9   F7C1  brne    LOOP_MS
+   347: 0000BA   912F  pop     r18
+   348: 0000BB   911F  pop     r17
+   349: 0000BC   910F  pop     r16
+   350: 0000BD   9508  ret
    351: 
-   352: ;--- FRENTE: as duas rodas "para frente" (carrinho avança) --------------------
-   353: ; Com motores espelhados, "ambas para frente" corresponde a rotacoes FISICAS
-   354: ; opostas (uma roda horario, outra anti-horario) -> exatamente sua descricao.
-   355: 
-   356: RUN_MOTORS:
-   357: 0000BB   9A5A  sbi PORTD, LIN1
-   358: 0000BC   985B  cbi PORTD, LIN2
-   359: 0000BD   9A5C  sbi PORTD, RIN1
-   360: 0000BE   985D  cbi PORTD, RIN2
-   361: 0000BF   9508  ret
-   362: 
-   363: 
-   364: ;--- PARADO: desliga as 4 chaves (motores em roda-livre) ----------------------
-   365: 
-   366: STOP_MOTORS:
-   367: 0000C0   985A  cbi PORTD, LIN1
-   368: 0000C1   985B  cbi PORTD, LIN2
-   369: 0000C2   985C  cbi PORTD, RIN1
-   370: 0000C3   985D  cbi PORTD, RIN2
-   371: 0000C4   9508  ret
-   372: 
-   373: ;--- GIRO DIREITA (no proprio eixo): roda E p/ frente, roda D p/ tras ---------
-   374: ; resultado: carrinho gira no sentido horario (visto de cima) = vira p/ direita
-   375: 
-   376: TURN_RIGHT:
-   377: 0000C5   9A5A  sbi PORTD, LIN1
-   378: 0000C6   985B  cbi PORTD, LIN2
-   379: 0000C7   985C  cbi PORTD, RIN1
-   380: 0000C8   9A5D  sbi PORTD, RIN2
-   381: 0000C9   9508  ret
-   382: 
-   383: 
-   384: ;--- GIRO ESQUERDA (no proprio eixo): roda E p/ tras, roda D p/ frente --------
-   385: 
-   386: TURN_LEFT:
-   387: 0000CA   985A  cbi PORTD, LIN1
-   388: 0000CB   9A5B  sbi PORTD, LIN2
-   389: 0000CC   9A5C  sbi PORTD, RIN1
-   390: 0000CD   985D  cbi PORTD, RIN2
-   391: 0000CE   9508  ret
-   392: 
-   393: ;--- DELAY ROTAÇÃO: espera um tempo com o motor rotacionando
-   394: 
-   395: WAIT_ROTATION:
-   396: 0000CF   E005  ldi r16, (1<<CS12)|(1<<CS10)
-   397: 0000D0   9300  sts TCCR1B,r16			;Configura PS 1024, iniciando contagem de 300ms (interrupção no match do comparador A do timer 1)
-        0000D1   0081
-   398: 
-   399: wait_interrupt:
-   400: 0000D2   110C  cpse r16, r12   ;Verifica se a interrupção foi ativada
-   401: 0000D3   CFFE  rjmp wait_interrupt
-   402: 
-   403: ;Após ser ativada, encerra a SR de espera, desativando o timer
-   404: 0000D4   2700  clr r16
-   405: 0000D5   9300  sts TCCR1B,r16
-        0000D6   0081
-   406: 0000D7   9508  ret
-   407: 
-   408: 
-   409: ;////////////////////////// SUB-ROTINAS DE INTERRUPÇÃO /////////////////////////////////
-   410: 
-   411: ;Compare match do Timer 1 -> Delay de rotação dos motores
-   412: 
-   413: INT_TIMER1_COMPA:
-   414: 0000D8   E001  ldi r16, 0x01  ;Sinalizador de que a interrupção foi ativada
-   415: 0000D9   9518  reti
-   416: 
-   417: 
-   418: INT_RX_USART:
-   419: ;Obs.: Preencher depois
-   420: 0000DA   0000  nop
-   421: 0000DB   9518  reti
+   352: 
+   353: 
+   354: 
+   355: ;//////////////////// AÇÕES DOS MOTORES /////////////////////////////
+   356: 
+   357: ;--- FRENTE: as duas rodas "para frente" (carrinho avança) --------------------
+   358: ; Com motores espelhados, "ambas para frente" corresponde a rotacoes FISICAS
+   359: ; opostas (uma roda horario, outra anti-horario) -> exatamente sua descricao.
+   360: 
+   361: RUN_MOTORS:
+   362: 0000BE   9A5A  sbi PORTD, LIN1
+   363: 0000BF   985B  cbi PORTD, LIN2
+   364: 0000C0   9A5C  sbi PORTD, RIN1
+   365: 0000C1   985D  cbi PORTD, RIN2
+   366: 0000C2   9508  ret
+   367: 
+   368: 
+   369: ;--- PARADO: desliga as 4 chaves (motores em roda-livre) ----------------------
+   370: 
+   371: STOP_MOTORS:
+   372: 0000C3   985A  cbi PORTD, LIN1
+   373: 0000C4   985B  cbi PORTD, LIN2
+   374: 0000C5   985C  cbi PORTD, RIN1
+   375: 0000C6   985D  cbi PORTD, RIN2
+   376: 0000C7   9508  ret
+   377: 
+   378: ;--- GIRO DIREITA (no proprio eixo): roda E p/ frente, roda D p/ tras ---------
+   379: ; resultado: carrinho gira no sentido horario (visto de cima) = vira p/ direita
+   380: 
+   381: TURN_RIGHT:
+   382: 0000C8   9A5A  sbi PORTD, LIN1
+   383: 0000C9   985B  cbi PORTD, LIN2
+   384: 0000CA   985C  cbi PORTD, RIN1
+   385: 0000CB   9A5D  sbi PORTD, RIN2
+   386: 0000CC   9508  ret
+   387: 
+   388: 
+   389: ;--- GIRO ESQUERDA (no proprio eixo): roda E p/ tras, roda D p/ frente --------
+   390: 
+   391: TURN_LEFT:
+   392: 0000CD   985A  cbi PORTD, LIN1
+   393: 0000CE   9A5B  sbi PORTD, LIN2
+   394: 0000CF   9A5C  sbi PORTD, RIN1
+   395: 0000D0   985D  cbi PORTD, RIN2
+   396: 0000D1   9508  ret
+   397: 
+   398: ;--- DELAY ROTAÇÃO: espera um tempo com o motor rotacionando
+   399: 
+   400: WAIT_ROTATION:
+   401: 
+   402: 0000D2   2700  clr r16
+   403: 0000D3   9300  sts TCNT1H, r16
+        0000D4   0085
+   404: 0000D5   9300  sts TCNT1L, r16     ;zera o timer 1
+        0000D6   0084
+   405: 
+   406: ;ldi r16, (1<<CS12)|(1<<CS10)
+   407: 0000D7   E00D  ldi r16, (1<<WGM12)|(1<<CS12)|(1<<CS10)
+   408: 0000D8   9300  sts TCCR1B,r16			;Configura PS 1024, iniciando contagem (interrupção no match do comparador A do timer 1)
+        0000D9   0081
+   409: 
+   410: wait_interrupt:
+   411: 0000DA   115C  cpse TIMER1_FLAG, r12   ;Verifica se a interrupção foi ativada
+   412: 0000DB   CFFE  rjmp wait_interrupt
+   413: 
+   414: ;Após ser ativada, encerra a SR de espera, desativando o timer
+   415: 0000DC   2755  clr TIMER1_FLAG
+   416: 0000DD   E008  ldi r16,(1<<WGM12)
+   417: 0000DE   9300  sts TCCR1B,r16
+        0000DF   0081
+   418: 0000E0   9508  ret
+   419: 
+   420: 
+   421: ;////////////////////////// SUB-ROTINAS DE INTERRUPÇÃO /////////////////////////////////
    422: 
-   423: 
-   424: ;END
-   425: ;Créditos aos magnânimos Gonlaço, FIR e MEEEEEEEEEEESTRE DARSKI
-   426: 
-   427: 
+   423: ;Compare match do Timer 1 -> Delay de rotação dos motores
+   424: 
+   425: INT_TIMER1_COMPA:
+   426: 0000E1   E051  ldi TIMER1_FLAG, 0x01  ;Sinalizador de que a interrupção foi ativada
+   427: 0000E2   9518  reti
    428: 
+   429: 
+   430: INT_RX_USART:
+   431: ;Obs.: Preencher depois
+   432: 0000E3   0000  nop
+   433: 0000E4   9518  reti
+   434: 
+   435: 
+   436: ;END
+   437: ;Créditos aos magnânimos Gonlaço, FIR e MEEEEEEEEEEESTRE DARSKI
+   438: 
+   439: 
+   440: 
 
 List of symbols:
 Type nDef nUsed             Decimalval           Hexval Name
@@ -467,27 +482,28 @@ Type nDef nUsed             Decimalval           Hexval Name
   L     1     2                    115               73 LACO_ESPERA_SUBIDA
   L     1     2                    121               79 ECHO_OK_SUBIU
   L     1     2                    123               7B CRONOMETRA_ECHO
-  L     1     2                    130               82 ESPERA_ECHO_DESCER
-  L     1     2                    139               8B ECHO_DESCEU_OK
-  L     1     4                    145               91 AVALIA_DISTANCIA
-  L     1     2                    150               96 CHANGE_DIRECTION
+  L     1     2                    129               81 ESPERA_ECHO_DESCER
+  L     1     2                    140               8C ECHO_DESCEU_OK
+  L     1     4                    146               92 AVALIA_DISTANCIA
+  L     1     2                    151               97 CHANGE_DIRECTION
   L     1     2                    159               9F ROTATION_1
-  L     1     2                    162               A2 ROTATION_2
-  L     1     2                    167               A7 ROTATION_3
-  L     1     8                    170               AA END_ROT
-  L     1     2                    172               AC ESPERA_MS
-  L     1     2                    175               AF LOOP_MS
-  L     1     2                    176               B0 LOOP_4
-  L     1     2                    177               B1 LOOP_250
-  L     1     4                    187               BB RUN_MOTORS
-  L     1     2                    192               C0 STOP_MOTORS
-  L     1     6                    197               C5 TURN_RIGHT
-  L     1     2                    202               CA TURN_LEFT
-  L     1     8                    207               CF WAIT_ROTATION
-  L     1     2                    210               D2 WAIT_INTERRUPT
-  L     1     2                    216               D8 INT_TIMER1_COMPA
-  L     1     2                    218               DA INT_RX_USART
+  L     1     2                    163               A3 ROTATION_2
+  L     1     2                    169               A9 ROTATION_3
+  L     1     6                    173               AD END_ROT
+  L     1     2                    175               AF ESPERA_MS
+  L     1     2                    178               B2 LOOP_MS
+  L     1     2                    179               B3 LOOP_4
+  L     1     2                    180               B4 LOOP_250
+  L     1     4                    190               BE RUN_MOTORS
+  L     1     8                    195               C3 STOP_MOTORS
+  L     1     6                    200               C8 TURN_RIGHT
+  L     1     2                    205               CD TURN_LEFT
+  L     1     8                    210               D2 WAIT_ROTATION
+  L     1     2                    218               DA WAIT_INTERRUPT
+  L     1     2                    225               E1 INT_TIMER1_COMPA
+  L     1     2                    227               E3 INT_RX_USART
   R     1     6                     22               16 ROT_COUNT
+  R     1     3                     21               15 TIMER1_FLAG
   C     1     0                     26               1A NOW_Y
   C     1     0                      6               06 NOW_M
   C     1     0                     25               19 NOW_D
@@ -508,10 +524,10 @@ Type nDef nUsed             Decimalval           Hexval Name
   C     1     1                     10               0A LIMIAR_CM
    No macros.
 
-Program             :      171 words.
+Program             :      180 words.
 Constants           :        0 words.
-Total program memory:      171 words.
+Total program memory:      180 words.
 Eeprom space        :        0 bytes.
 Data segment        :        0 bytes.
 Compilation completed, no errors.
-Compilation ended 25.06.2026, 09:47:09
+Compilation ended 25.06.2026, 17:08:28

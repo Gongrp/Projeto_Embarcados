@@ -43,7 +43,7 @@
 .equ DUTY_STD  = 160      ; ~63%
 .equ DUTY_FAST = 255      ; 100%
 
-;Delay de rotação dos motores
+;Delay de rotação dos motores  (400ms)
 .equ ROT_DELAY = 6250 		;Número de contagens com PS de 1024 -> N = T_DELAY(s) * (16M/PS)
 
 
@@ -54,6 +54,9 @@
 
 ;Variável de controle de mudanças de direção realizadas (incrementada a cada rotação sucessiva e é zerado quando o carro pode seguir em frente)
 .def ROT_COUNT = r22
+
+;Variável de registro de ocorrência de interrupção do comparadorA
+.def TIMER1_FLAG = r21
 
 
 ;////////////// VETORES DE INTERRUPÇÃO ///////////////////////////////
@@ -70,11 +73,10 @@ rjmp INT_TIMER1_COMPA
 .org 0x0024
 rjmp INT_RX_USART
 
-.org 0x0034
-
 
 ;////////////// CONFIGURAÇÕES INICIAIS //////////////////////////
 
+.org 0x0034
 config:
 
 ;Inicializando SP
@@ -105,7 +107,7 @@ out PORTD, r16
 ldi r16, (1<<TRIG)
 out DDRB,r16
 clr r16
-out PORTD,r16
+out PORTB,r16
 ;Define o pino do TRIG como saída e o do ECHO como entrada, zera os valores nas portas
 
 ;Configuração dos timers
@@ -121,10 +123,11 @@ out TCCR0B,r16				    ;Configura PS 64
 
 ;TIMER1 -> Delay de rotação do motor
 
-ldi r16, (1<<COM0A1)|(1<<WGM11)
-sts TCCR1A,r16                  ;Configura timer 1 no modo CTC conectando comparador A no modo não inversor
+;ldi r16, (1<<COM1A1)|(1<<WGM11)
 clr r16
-sts TCCR1B,r16			;Timer inicia desativado
+sts TCCR1A,r16                  ;Configura timer 1 no modo CTC conectando comparador A no modo não inversor
+ldi r16, (1<<WGM12)
+sts TCCR1B,r16			            ;Timer inicia desativado
 ldi r16, low(ROT_DELAY)
 sts OCR1AL,r16
 ldi r16, high(ROT_DELAY)
@@ -238,20 +241,20 @@ sts     TCNT2, r16
 ldi     r16, (1<<CS22) | (1<<CS21) | (1<<CS20)
 sts     TCCR2B, r16
 
-; Timeout para não travar
-ldi     r17, 0xFF
 
 ESPERA_ECHO_DESCER:
 sbis    PINB, ECHO
 rjmp    ECHO_DESCEU_OK
 
-dec     r17
-brne    ESPERA_ECHO_DESCER
+;Controle de TIMEOUT: Verifica se o tempo estourou o limite
+lds     r16,TCNT2
+cpi     r16,250  ;Compara o valor do timer2 com o limite de timeout
+brlo    ESPERA_ECHO_DESCER
 
-; TIMEOUT (executa esse bloco caso r17 chegue a zero)
+; TIMEOUT (executa esse bloco caso o timer chegue em 250 -> limite)
 clr     r16
 sts     TCCR2B, r16 ;Para o timer2
-ldi 	r20,0xFF 		;Armazena o valor medido de distância em r20 (0xFF -> Valor de erro de timeout)
+ldi 	  r20,0xFF 		;Armazena o valor medido de distância em r20 (0xFF -> Valor de erro de timeout)
 ret
 
 ECHO_DESCEU_OK:
@@ -278,14 +281,13 @@ rcall RUN_MOTORS
 ret
 
 CHANGE_DIRECTION:
-rcall STOP_MOTORS
+rcall STOP_MOTORS  ;OBS.: AVALIAR SE É NECESSÁRIO INSERIR DELAY PARA PARAR TOTALMENTE
 cpi ROT_COUNT, 0x00
 breq ROTATION_1
 cpi ROT_COUNT, 0x01
 breq ROTATION_2
 cpi ROT_COUNT, 0x02
 breq ROTATION_3
-rjmp END_ROT
 
 ;Se já estiver com o ROT_COUNT em 0x03 (encontrou obstáculo voltando a de onde veio, fica parado até detectar uma abertura)
 ret	;Sem incrementar o contador de rotações
@@ -296,6 +298,7 @@ ROTATION_1:
 ;Gira uma vez para a esquerda
 rcall TURN_LEFT
 rcall WAIT_ROTATION
+rcall STOP_MOTORS
 rjmp END_ROT
 
 ROTATION_2:
@@ -304,12 +307,14 @@ rcall TURN_RIGHT
 rcall WAIT_ROTATION
 rcall TURN_RIGHT
 rcall WAIT_ROTATION
+rcall STOP_MOTORS
 rjmp END_ROT
 
 ROTATION_3:
 ;Gira mais uma vez para a direita, se direcionando no sentido oposto do qual veio antes da primeira detecção de obstáculo
 rcall TURN_RIGHT
 rcall WAIT_ROTATION
+rcall STOP_MOTORS
 rjmp END_ROT
 
 
@@ -329,7 +334,7 @@ ESPERA_MS:
         push    r17
         push    r18
 LOOP_MS:
-        ldi     r17, 4
+        ldi     r17, 24
 LOOP_4:
         ldi     r18, 250
 LOOP_250:
@@ -393,15 +398,22 @@ ret
 ;--- DELAY ROTAÇÃO: espera um tempo com o motor rotacionando
 
 WAIT_ROTATION:
-ldi r16, (1<<CS12)|(1<<CS10)
-sts TCCR1B,r16			;Configura PS 1024, iniciando contagem de 300ms (interrupção no match do comparador A do timer 1)
+
+clr r16
+sts TCNT1H, r16
+sts TCNT1L, r16     ;zera o timer 1
+
+;ldi r16, (1<<CS12)|(1<<CS10)
+ldi r16, (1<<WGM12)|(1<<CS12)|(1<<CS10)
+sts TCCR1B,r16			;Configura PS 1024, iniciando contagem (interrupção no match do comparador A do timer 1)
 
 wait_interrupt:
-cpse r16, r12   ;Verifica se a interrupção foi ativada
+cpse TIMER1_FLAG, r12   ;Verifica se a interrupção foi ativada
 rjmp wait_interrupt
 
 ;Após ser ativada, encerra a SR de espera, desativando o timer
-clr r16
+clr TIMER1_FLAG
+ldi r16,(1<<WGM12)
 sts TCCR1B,r16
 ret
 
@@ -411,7 +423,7 @@ ret
 ;Compare match do Timer 1 -> Delay de rotação dos motores
 
 INT_TIMER1_COMPA:
-ldi r16, 0x01  ;Sinalizador de que a interrupção foi ativada
+ldi TIMER1_FLAG, 0x01  ;Sinalizador de que a interrupção foi ativada
 reti
 
 
