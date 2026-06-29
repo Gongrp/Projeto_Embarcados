@@ -1,11 +1,8 @@
 /avr_sim_project_file
-C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\Bluetooth_simple.asm
-mainasm=
-clock=1000000
+C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\Bluetooth\Bluetooth_simple.asm
+mainasm=Bluetooth_simple.asm
+file=Bluetooth_simple.asm,1,1,1
+clock=0, Div8
 device-type=ATmega328P
-device-package=28-pin-PDIP
 windows=acepstwz
-alert1=0,0,-1,-1,,0,0
-adcvref=5.0000
-adcvop=5.0000
-adcch=0.0000,0.0000,0.0000,0.0000,0.0000,0.0000
+alert1=0,0,-1,0,,0,0

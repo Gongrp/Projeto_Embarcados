@@ -1,16 +1,16 @@
 gavrasm Gerd's AVR assembler version 5.4 (C)2022 by DG4FAC
 ----------------------------------------------------------
 
-Path:        C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\
+Path:        C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\Bluetooth\
 Source file: Bluetooth_simple.asm
 Hex file:    Bluetooth_simple.hex
 Eeprom file: Bluetooth_simple.eep
-Compiled:    21.06.2026, 20:10:51
+Compiled:    28.06.2026, 20:48:57
 Pass:        2
 
      1: .include "m328Pdef.inc"
  -> Warning 009: Include defs not necessary, using internal values!
-   File: C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\Bluetooth_simple.asm, Line: 1
+   File: C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\Bluetooth\Bluetooth_simple.asm, Line: 1
    Source line: .include "m328Pdef.inc"
      2: .org 0x0000
      3: 
@@ -69,28 +69,45 @@ Pass:        2
     51: 000016   FF07  sbrs    r16, RXC0     ;Pula para a leitura do dado caso haja dados no buffer a serem lidos (RXC0 set) -> Pode gerar interrupção
     52: 000017   CFFC  rjmp    main         ;Reinicia
     53: 
-    54: ;Trocar por vetor de interrupção USART_RXC
-    55: ;Leitura do dado
-    56: 000018   9110  lds     r17,UDR0      ;Registrador que armazena o dado recebido por RX0
-        000019   00C6
-    57: 00001A   B915  out     PORTB,r17     ;Joga o dado lido nos leds da porta B
-    58: 00001B   CFF8  rjmp main
+    54: ; Captura flags de erro ANTES de ler UDR0.
+    55: ; A leitura de UDR0 apaga FE0 / DOR0 / UPE0 em UCSR0A,
+    56: ; então é preciso salvá-las enquanto r16 ainda contém UCSR0A.
+    57: 000018   2F20  mov     r18, r16
+    58: 000019   712C  andi    r18, (1<<FE0) | (1<<DOR0) | (1<<UPE0)
+    59: 
+    60: ;Trocar por vetor de interrupção USART_RXC
+    61: ;Leitura do dado
+    62: 00001A   9110  lds     r17,UDR0      ;Registrador que armazena o dado recebido por RX0
+        00001B   00C6
+    63: 
+    64: ;Se houve erro de frame / overrun / paridade: descarta o byte
+    65: 00001C   2322  tst     r18
+    66: 00001D   F7B1  brne    main
+    67: 
+    68: ; Filtra caracteres de controle ASCII (valor < 0x20)
+    69: 00001E   3210  cpi     r17, 0x20
+    70: 00001F   F3A0  brlo    main           ; descarta sem atualizar PORTB
+    71: 
+    72: ; Exibe apenas os 6 bits inferiores nos LEDs PB0–PB5
+    73: 000020   731F  andi    r17, 0x3F
+    74: 000021   B915  out     PORTB, r17
+    75: 000022   CFF1  rjmp    main
 
 List of symbols:
 Type nDef nUsed             Decimalval           Hexval Name
   T     1     1                    171               AB ATMEGA328P
-  L     1     4                     20               14 MAIN
+  L     1     8                     20               14 MAIN
   C     1     0                     26               1A NOW_Y
   C     1     0                      6               06 NOW_M
-  C     1     0                     21               15 NOW_D
-  C     1     0                  46194             B472 NOW_I
+  C     1     0                     28               1C NOW_D
+  C     1     0                  46201             B479 NOW_I
   C     1     2                    103               67 UBRR_VAL
    No macros.
 
-Program             :       28 words.
+Program             :       35 words.
 Constants           :        0 words.
-Total program memory:       28 words.
+Total program memory:       35 words.
 Eeprom space        :        0 bytes.
 Data segment        :        0 bytes.
 Compilation completed, no errors.
-Compilation ended 21.06.2026, 20:10:51
+Compilation ended 28.06.2026, 20:48:57

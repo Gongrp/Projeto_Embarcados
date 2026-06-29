@@ -2,14 +2,14 @@
 
 //Pinos IN servem para controlar a direção do motor, pinos EN a velocidade (recebem sinal de PWM)
 //Motor A
-#define ENA 18
-#define IN1 13
-#define IN2 14
+#define ENA PD6 
+#define IN1 PD2
+#define IN2 PD3
 
 //Motor B
-#define ENB 19
-#define IN3 26
-#define IN4 25
+#define ENB PD6
+#define IN3 PD4
+#define IN4 PD5
 
 //Velocidades iniciais dos motores
 const char velMotorA = 100; 
