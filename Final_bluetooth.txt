@@ -1,0 +1,672 @@
+;Código Completo - Controle de robozinho motorizado -  ATmega328P @ 16 MHz
+
+
+.include "m328Pdef.inc"
+
+;///////////////// CONSTANTES E PINAGEM ///////////////////////
+
+;PODEMOS REDEFINIR OS PARÂMETROS AQUI FACILMENTE, SEM MEXER NO CORPO DO CÓDIGO (DE OLHO EM VCS FIR E MESTRE)
+
+
+;PINOS
+
+; Ponte-H ESQUERDA (Motor E)         Ponte-H DIREITA (Motor D)
+;   PD2 = IN1 (E)                      PD4 = IN1 (D)
+;   PD3 = IN2 (E)                      PD5 = IN2 (D)
+
+; Convencao por roda: IN1=1,IN2=0 -> "frente"  |  IN1=0,IN2=1 -> "tras"
+
+.equ LIN1 = PD2
+.equ LIN2 = PD3
+.equ RIN1 = PD4
+.equ RIN2 = PD5
+.equ PWM_PIN = PD6 ; PWM VELOCIDADE (saida OC0A do Timer0) -> ligar FISICAMENTE em ENA E ENB
+
+; SENSOR ULTRASSÔNICO
+
+.equ TRIG = PB4
+.equ ECHO = PB3
+
+;COMUNICAÇÃO USART MÓDULO BLUETOOTH
+
+.equ RX = PD0
+.equ TX = PD1
+
+; CONSTANTES
+
+;MODOS DE VELOCIDADE DO MOTOR
+
+.equ DUTY_SLOW = 90       ; ~35% (SPEED_REG -> 0)
+.equ DUTY_STD  = 160      ; ~63% (SPEED_REG -> 1)
+.equ DUTY_FAST = 255      ; 100% (SPEED_REG -> 2)
+
+;Delay de rotação dos motores (durante a rotação) -> 400ms
+.equ ROT_DELAY = 6250 		;Número de contagens com PS de 1024 -> N = T_DELAY(s) * (16M/PS)
+
+;Delay pré-rotação para o carrinho parar
+.equ STOP_DELAY = 
+
+
+;Baud rate comunicação USART:
+.equ 	UBRR_VAL = 103 ; define constante representando o baud rate da comunicação UART em 9600bps
+                       ; UBRR_VAL = (f_clk/(16*baud_rate)) - 1
+
+;Comandos bluetooth
+
+.equ CMD_FORWARD    = 0x46     ; F
+.equ CMD_BACK       = 0x42     ; B
+.equ CMD_LEFT       = 0x4C     ; L
+.equ CMD_RIGHT      = 0x52     ; R
+.equ CMD_GO	    = 0x47     ; G
+.equ CMD_STOP       = 0x53     ; S
+.equ CMD_SPEED_UP   = 0x2B     ; +
+.equ CMD_SPEED_DOWN = 0x2D     ; -
+
+
+	
+
+;Distância de alcance sensor
+.equ    LIMIAR_CM = 10
+
+;Variável de registro de ocorrência de interrupção do comparadorA
+.def TIMER1_FLAG = r21
+
+;Variável de controle de mudanças de direção realizadas (incrementada a cada rotação sucessiva e é zerado quando o carro pode seguir em frente)
+.def ROT_COUNT = r22
+
+;Variável de registro de controle de PWM
+.def SPEED_REG = r23
+
+
+;////////////// VETORES DE INTERRUPÇÃO ///////////////////////////////
+
+.cseg
+.org 0x0000
+rjmp config ;Pula para a SR de configuração
+
+;Incluir interrupções para os timers 0 e 2?
+
+.org 0x0016
+rjmp INT_TIMER1_COMPA
+
+.org 0x0024
+rjmp INT_RX_USART
+
+
+;////////////// CONFIGURAÇÕES INICIAIS //////////////////////////
+
+.org 0x0034
+config:
+
+;Inicializando SP
+ldi     R16,LOW(RAMEND)
+out     SPL,R16
+ldi     R16,HIGH(RAMEND)
+out     SPH,R16
+
+;Configurações iniciais de registradores
+
+;Constante de comparação para sinalizar ativação de interrupts
+ldi r16, 0x01
+mov r12, r16
+
+;Guarda a velocidade padrão como a configuração inicial
+ldi SPEED_REG, 0x01
+
+clr ROT_COUNT ;Inicia a contagem de rotações em zero
+
+
+
+;Configuração das portas
+
+;PORTD:
+ldi r16, (1<<LIN1)|(1<<LIN2)|(1<<RIN1)|(1<<RIN2)|(1<<PWM_PIN)
+out DDRD, r16
+clr r16
+out PORTD, r16
+;Define todos os pinos dos motores como saída, zera os valores nas portas
+
+;PORTB:
+ldi r16, (1<<TRIG)
+out DDRB,r16
+clr r16
+out PORTB,r16
+;Define o pino do TRIG como saída e o do ECHO como entrada, zera os valores nas portas
+
+;Configuração dos timers
+
+;TIMER0 -> PWM velocidade dos motores
+
+ldi r16, (1<<COM0A1)|(1<<WGM01)|(1<<WGM00)
+out TCCR0A,r16                              ;Configura timer0 no modo fast pwm, conecta comparador A no modo não inversor
+ldi r16, (1<<CS01)|(1<<CS00)
+out TCCR0B,r16				    ;Configura PS 64
+;Velocidade inicial??
+
+
+;TIMER1 -> Delay de rotação do motor
+
+;ldi r16, (1<<COM1A1)|(1<<WGM11)
+clr r16
+sts TCCR1A,r16                  ;Configura timer 1 no modo CTC conectando comparador A no modo não inversor
+ldi r16, (1<<WGM12)
+sts TCCR1B,r16			            ;Timer inicia desativado
+ldi r16, low(ROT_DELAY)
+sts OCR1AL,r16
+ldi r16, high(ROT_DELAY)
+sts OCR1AH,r16			;Salva no comparador o número de contagens definido pelo delay desejado -> Determina ângulo de rotação
+
+
+;TIMER2 -> Detecção do sensor ultrassônico (tempo entre emissão no TRIG e recepção no ECHO)
+
+ldi r16,0x00
+sts TCCR2A,r16 	   ;Configura timer 2 no modo normal (delay)
+sts TCCR2B,r16     ;Timer2 inicia desativado
+
+;Configuração das interrupções:
+
+;Interrupt do timer 1
+ldi r16, (1<<OCIE1A)
+sts TIMSK1,r16
+
+;Interrupção do bluetooth é definido em seguida
+sei	;Ativa enable global
+
+;Configuração da comunicação USART (bluetooth)
+
+;Configuração baud rate (taxa de comunicação -> 9,6 kbps)
+ldi     r16,HIGH(UBRR_VAL)
+sts     UBRR0H,r16
+ldi     r16,LOW(UBRR_VAL)
+sts     UBRR0L,r16
+
+;Habilitação do RX do UART0 e interrupção
+ldi     r16,(1<<RXEN0)|(1<<RXCIE0)
+sts     UCSR0B,r16			;Ativa o RX do USART e sua respectiva interrupção (ativa quando há um dado a ser lido)
+
+;Configuração do formato do frame de comunicação
+ldi     r16,(1<<UCSZ01)|(1<<UCSZ00)
+sts     UCSR0C,r16;Seta os bits 2:1, definindo tamanho de caracter para 8 bits
+                  ;Configura modo assíncrono (bit7:bit6 = 00)
+                  ;Modo de paridade desabilitado (bit5:bit4 = 00)
+
+
+;Inicialização dos motores em velocidade padrão
+
+ldi r16, DUTY_STD
+out OCR0A,r16		;Define duty cycle inicial dos motores
+
+rcall RUN_MOTORS	;Inicia movimento para frente
+
+
+;////////////////// CÓDIGO PRINCIPAL ///////////////////////////////
+
+;loop principal -> Realiza o processo de medição com o sensor ultrassônico e determina se o carrinho deve mudar de direção
+
+main:
+
+;OBS.: SE NECESSÁRIO, INCORPORAR DEPOIS FILTRO MÉDIA MÓVEL PARA AS MEDIDAS DO ULTRASSONICO
+rcall   DISPARA_TRIGGER
+rcall   ESPERA_ECHO_SUBIR
+brcs    SEM_ECO              ; carry=1 -> sensor não respondeu
+
+rcall   CRONOMETRA_ECHO
+rcall   CONVERTE_PARA_CM
+rcall   AVALIA_DISTANCIA
+rjmp 	COOLDOWN
+
+SEM_ECO:
+ldi     r20, 0xFF        ; valor alto = "livre"
+rcall AVALIA_DISTANCIA
+
+COOLDOWN:
+; pausa entre medições (~80ms, recomendado pelo datasheet)
+ldi     r16, 80
+rcall   ESPERA_MS
+
+rjmp   main; Reinicia loop principal
+
+
+
+;////////////////////// SUB-ROTINAS //////////////////////////////////
+
+DISPARA_TRIGGER:
+sbi     PORTB, TRIG
+;10us a 16MHz = 160 ciclos de clock
+ldi     r17, 50
+
+PULSO_TRIG: ;Aguarda 10 microsseg com TRIG em HIGH (delay implementado com decremento)
+nop
+nop
+dec     r17
+brne    PULSO_TRIG
+cbi     PORTB, TRIG
+ret
+
+
+; Aguarda o pino ECHO ir para nível alto.
+; Retorna: Carry = 1 se houve timeout (sem resposta do sensor)
+;          Carry = 0 se ECHO subiu normalmente
+
+ESPERA_ECHO_SUBIR:
+clr r18           ; contador de timeout (256 voltas)
+sts TCNT2,r18
+ldi r18,(1<<TOV2)
+out TIFR2,r18      ; limpa flag pendente (escreve 1 para limpar)
+ldi r18, (1<<CS22)|(1<CS21)
+sts TCCR2B,r18      ; inicia Timer2 com prescaler 256
+
+LACO_ESPERA_SUBIDA:
+sbic    PINB, ECHO    ; se ECHO=0, pula a próxima linha
+rjmp    ECHO_OK_SUBIU
+in      r18,TIFR2
+sbrc    R18,TOV2
+rjmp    TIMEOUT_SUBIDA
+rjmp    LACO_ESPERA_SUBIDA
+
+TIMEOUT_SUBIDA:
+clr     r18
+sts     TCCR2B, r18       ; para o timer
+sec                       ; timeout
+ret
+
+ECHO_OK_SUBIU:
+clc                         ; limpa carry = sucesso
+ret
+
+
+;/////// CRONOMETRA_ECHO /////////////////////
+
+; Usa Timer2 com PS de 256 para contar quanto tempo o pino ECHO permanece em nível alto.
+
+CRONOMETRA_ECHO:
+clr     r16
+sts     TCCR2B,r16 ;para o timer
+sts     TCNT2, r16 ;zera o contador
+ldi     r16, (1<<TOV2)
+out     TIFR2, r16         ; limpa flag pendente
+
+; Liga Timer2 com prescaler 256
+ldi     r16, (1<<CS22) | (1<<CS21)
+sts     TCCR2B, r16
+
+
+ESPERA_ECHO_DESCER:
+sbis    PINB, ECHO
+rjmp    ECHO_DESCEU_OK
+in      r16, TIFR2
+sbrc    r16, TOV2  ;Pula para repetir o loop de espera enquanto não há overflow
+rjmp    TIMEOUT_DESCIDA
+rjmp    ESPERA_ECHO_DESCER
+
+TIMEOUT_DESCIDA:
+; TIMEOUT: para o timer e retorna distância máxima como indicador de timeout
+clr     r16
+sts     TCCR2B,r16
+ldi     r20,0xFF
+ret
+
+
+ECHO_DESCEU_OK:
+clr     r16
+sts     TCCR2B, r16 ;Para o timer2
+
+lds     r20, TCNT2    ;Lê valor de tempo de demora da detecção (será depois convertido em cm)
+ret
+
+;//////////////////CONVERSÃO PARA CM ///////////////////////////////
+
+;OBS.: ADICIONAR FÓRMULA DE CONVERSÃO PARA CM
+
+CONVERTE_PARA_CM:
+push    R16
+push    R17
+push    R18
+push    r0
+push    r1
+
+mov     r17, r20      ; Move o valor da distância para r17
+ldi     r16, 10
+mul     r17, r16        ; R1:R0 = ticks(tempo) * 10 (até 2550, 16 bits é suficiente)
+mov     r16, r0           ; r16 = byte baixo do produto
+mov     r18, r1           ; r18 = byte alto do produto
+
+; Divide o valor de 16 bits (r18:r16) por 36
+; por subtração repetida, contando em r20
+
+clr     r20
+
+DIV_LOOP:
+tst     r18
+brne    DIV_SUBTRAI         ; byte alto != 0 -> valor >= 256 >= 36
+cpi     r16, 36
+brlo    DIV_FIM             ; byte alto = 0 e baixo < 36 -> terminou
+
+DIV_SUBTRAI:
+subi    r16, 36
+brcc    DIV_SEM_EMPRESTIMO
+dec     r18               ; houve "borrow", ajusta byte alto
+
+DIV_SEM_EMPRESTIMO:
+inc     r20
+rjmp    DIV_LOOP
+
+DIV_FIM:
+;Retorna os valores na pilha para seus registradores e encerra divisão
+pop     r1
+pop     r0
+pop     r18
+pop     r17
+pop     r16
+ret
+
+;/////////////////// TESTE DE DISTÂNCIA /////////////////////////////
+
+;Compara distância em cm medida com o limiar definido para determinar se o carrinho deve rotacionar, e em qual sentido (dependendo das rotações anteriores)
+;Se estiver no meio de um processo de mudança de direção e não for detectado obstáculo, reinicia o movimento para frente
+
+AVALIA_DISTANCIA:
+cpi     r20, LIMIAR_CM
+
+;Se o valor em r20 for MENOR que o limiar -> obstáculo detectado
+brlo    CHANGE_DIRECTION
+
+;Se não, limpa o registrador de rotações, reativa motores e volta ao loop principal
+clr ROT_COUNT
+rcall RUN_MOTORS
+ret
+
+CHANGE_DIRECTION:
+rcall STOP_MOTORS 
+
+;Delay de segurança para esperar motores realmente pararem
+ldi r16, 150        ; 150 ms de pausa
+rcall ESPERA_MS	    ;Reaproveita a mesma subrotina usada pro sensor ultrassônico
+
+cpi ROT_COUNT, 0x00
+breq ROTATION_1
+cpi ROT_COUNT, 0x01
+breq ROTATION_2
+cpi ROT_COUNT, 0x02
+breq ROTATION_3
+
+;Se já estiver com o ROT_COUNT em 0x03 (encontrou obstáculo voltando a de onde veio, fica parado até detectar uma abertura)
+ret	;Sem incrementar o contador de rotações
+
+
+;Se ROT_COUNT for 0x00, segue no normal (ROTATION_1)
+ROTATION_1:
+;Gira uma vez para a esquerda
+rcall TURN_LEFT
+rcall WAIT_ROTATION
+rcall STOP_MOTORS
+rjmp END_ROT
+
+ROTATION_2:
+;Gira duas vezes para a direita (sentido oposto da primeira rotação)
+rcall TURN_RIGHT
+rcall WAIT_ROTATION
+rcall TURN_RIGHT
+rcall WAIT_ROTATION
+rcall STOP_MOTORS
+rjmp END_ROT
+
+ROTATION_3:
+;Gira mais uma vez para a direita, se direcionando no sentido oposto do qual veio antes da primeira detecção de obstáculo
+rcall TURN_RIGHT
+rcall WAIT_ROTATION
+rcall STOP_MOTORS
+rjmp END_ROT
+
+
+END_ROT:
+inc ROT_COUNT		;Aumenta o número de rotações realizadas
+ret
+
+
+;//////////// LOOP DE DELAY ENTRE MEDIÇÕES ////////////////////
+
+;Implementação de delay de cooldown compartilhada entre o sensor ultrassônico (entre medições) e os motores (antes de trocar de direção)
+;Número de ms da espera é carregado em r16 antes da chamada da subrotina
+
+ESPERA_MS:
+push    r16
+push    r17
+push    r18
+
+LOOP_MS:
+ldi     r17, 24
+
+LOOP_4:
+ldi     r18, 250
+
+LOOP_250:
+dec     r18
+brne    LOOP_250
+dec     r17
+brne    LOOP_4
+dec     r16
+brne    LOOP_MS
+pop     r18
+pop     r17
+pop     r16
+ret
+
+
+;//////////////////// AÇÕES DOS MOTORES /////////////////////////////
+
+;SRs que podem ser chamadas tanto pelo funcionamento automático quanto pelos comandos via bluetooth
+
+;--- FRENTE: as duas rodas "para frente" (carrinho avança) --------------------
+; Com motores espelhados, "ambas para frente" corresponde a rotacoes FISICAS
+; opostas (uma roda horario, outra anti-horario) -> exatamente sua descricao.
+
+RUN_MOTORS:
+sbi PORTD, LIN1
+cbi PORTD, LIN2
+sbi PORTD, RIN1
+cbi PORTD, RIN2
+ret
+
+
+;--- PARADO: desliga as 4 chaves (motores em roda-livre) ----------------------
+
+STOP_MOTORS:
+cbi PORTD, LIN1
+cbi PORTD, LIN2
+cbi PORTD, RIN1
+cbi PORTD, RIN2
+ret
+
+;--- GIRO DIREITA (no proprio eixo): roda E p/ frente, roda D p/ tras ---------
+; resultado: carrinho gira no sentido horario (visto de cima) = vira p/ direita
+
+TURN_RIGHT:
+sbi PORTD, LIN1
+cbi PORTD, LIN2
+cbi PORTD, RIN1
+sbi PORTD, RIN2
+ret
+
+
+;--- GIRO ESQUERDA (no proprio eixo): roda E p/ tras, roda D p/ frente --------
+
+TURN_LEFT:
+cbi PORTD, LIN1
+sbi PORTD, LIN2
+sbi PORTD, RIN1
+cbi PORTD, RIN2
+ret
+
+;--- DELAY ROTAÇÃO: espera um tempo com o motor rotacionando ---------
+
+WAIT_ROTATION:
+
+clr r16
+sts TCNT1H, r16
+sts TCNT1L, r16     ;zera o timer 1
+
+;ldi r16, (1<<CS12)|(1<<CS10)
+ldi r16, (1<<WGM12)|(1<<CS12)|(1<<CS10)
+sts TCCR1B,r16			;Configura PS 1024, iniciando contagem (interrupção no match do comparador A do timer 1)
+
+wait_interrupt:
+cpse TIMER1_FLAG, r12   ;Verifica se a interrupção foi ativada
+rjmp wait_interrupt
+
+;Após ser ativada, encerra a SR de espera, desativando o timer
+clr TIMER1_FLAG
+ldi r16,(1<<WGM12)
+sts TCCR1B,r16
+ret
+
+
+;--- AJUSTE DE VELOCIDADE: altera o valor do comparador A do timer0 ---------
+
+SPEED_UP:
+cpi SPEED_REG,0x02 
+breq no_change		;Verifica se já está no limite superior e pula o incremento e ajuste caso sim
+inc SPEED_REG
+rjmp adjust_pwm
+
+
+SPEED_DOWN:
+cpi SPEED_REG, 0x00 
+breq no_change		;Verifica se já está no limite inferior e pula o decremento e ajuste caso sim
+dec SPEED_REG
+rjmp adjust_pwm
+
+adjust_pwm:
+;Determina o valor de PWM para passar para OCR0A com base no valor de SPEED_REG (0,1 ou 2)
+cpi SPEED_REG, 0x00
+breq set_slow
+cpi SPEED_REG, 0x01
+breq set_medium
+
+;Se não der branch nas duas, é para setar em fast
+ldi r16, DUTY_FAST
+out OCR0A,r16		;Passa o valor definido para o comparador A do timer0
+ret
+
+set_slow:
+ldi r16, DUTY_SLOW
+out OCR0A, r16 		
+ret
+
+set_medium:
+ldi r16, DUTY_STD
+out OCR0A, r16
+ret
+
+no_change:
+ret			;Caso seja um comando que não possa ser executado, só retorna
+
+
+;////////////////////////// SUB-ROTINAS DE INTERRUPÇÃO /////////////////////////////////
+
+;Compare match do Timer 1 -> Delay de rotação dos motores
+
+INT_TIMER1_COMPA:
+ldi TIMER1_FLAG, 0x01  ;Sinalizador de que a interrupção foi ativada
+reti
+
+;SR de quando chega um dado no RX do USART
+
+INT_RX_USART:
+
+;Salva os dados caso esteja no meio de uma operação quando a interrupção for ativada
+push r16
+in   r16, _SFR_IO_ADDR(SREG)  ; Lê o registrador de Status
+push r16                      ; Salva o SREG na pilha
+push r17
+push r18
+
+;Tratamento de erros
+lds     r16, UCSR0A            
+mov     r18, r16
+andi    r18, (1<<FE0) | (1<<DOR0) | (1<<UPE0)
+
+;Lê a mensagem recebida
+lds     r17, UDR0      
+; Se houve erro de frame / overrun / paridade: vai para o fim descartar
+tst     r18
+brne    end_sri
+
+; Filtra caracteres de controle ASCII (valor < 0x20)
+cpi     r17, 0x20
+brlo    end_sri         ; se for menor, pula o processamento e encerra a interrupção, esperando próximo caracter (se houver)
+
+rcall  process_command
+
+end_sri:
+;Recupera os valores originais na ordem inversa do push
+pop r18
+pop r17
+pop r16                       ; Recupera o SREG antigo em r16
+out _SFR_IO_ADDR(SREG), r16   ; Devolve o SREG ao seu lugar
+pop r16                       ; Recupera o r16 original do main
+                           
+reti
+
+
+;////////////// SR DE PROCESSAMENTO DO SINAL ////////////////////////////
+
+process_command:
+
+ldi     ZL,low(command_table << 1)
+ldi     ZH,high(command_table <<1) ;Carrega o endereço da tabela de comandos no ponteiro Z
+                                   ;multiplicamos o endereço por 2 (<< 1) porque a Flash é organizada em Words (16 bits)
+
+search_loop:
+
+lpm   r18,Z+   ;Lê o caracter da tabela e incrementa o ponteiro Z
+
+cpi   r18,0X00 ;Determina se chegou no fim da tabela (null terminator)
+breq  invalid_command
+
+cp    r18,r17  ;Compara o caracter da tabela com o recebido
+breq  found_command
+
+adiw  ZL, 3        ;Se ainda não deu match, segue percorrendo a tabela após incrementar o ponteiro em 3 bytes
+rjmp  search_loop
+
+invalid_command:
+ret
+
+found_command:
+adiw  ZL,1        ;Pula o byte de padding (0xFF)
+lpm   r20,Z+      ;Salva byte alto do endereço da SR em r20
+lpm   r19,Z       ;Salva byte baixo do endereço da SR em r19
+
+mov ZH, R20
+mov ZL, R19
+
+ijmp              ;Salta para o endereço em Z (subrotina da ação dos motores)
+
+;Vai dar ret dentro da SR específica
+
+
+;////////////// LOOKUP TABLE DOS COMANDOS ///////////////////////////
+
+command_table:
+
+.db CMD_GO,	    0xFF, high(RUN_MOTORS),  low(RUN_MOTORS)
+.db CMD_STOP,       0xFF, high(STOP_MOTORS), low(STOP_MOTORS)
+.db CMD_SPEED_UP,   0xFF, high(SPEED_UP),    low(SPEED_UP)
+.db CMD_SPEED_DOWN, 0xFF, high(SPEED_DOWN),  low(SPEED_DOWN)
+
+;A avaliar se serão incluídos
+;.db CMD_FORWARD,    0xFF, high(run_forward), low(run_forward)
+;.db CMD_BACK,       0xFF, high(run_back),    low(run_back)
+;.db CMD_LEFT,       0xFF, high(turn_left),   low(turn_left)
+;.db CMD_RIGHT,      0xFF, high(turn_right),  low(turn_right)
+
+
+.db 0x00,0x00       ;demarcador de fim da tabela
+
+
+
+
+
+;END
+;Créditos aos magnânimos Gonlaço, FIR e MEEEEEEEEEEESTRE DARSKI

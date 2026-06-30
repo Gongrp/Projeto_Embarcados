@@ -13,8 +13,8 @@
 ;PINOS
 
 ; Ponte-H ESQUERDA (Motor E)         Ponte-H DIREITA (Motor D)
-;   PD2 = IN1 (E)                      PD4 = IN1 (D)
-;   PD3 = IN2 (E)                      PD5 = IN2 (D)
+;   PD2 = IN1 (E)                      PD4 = IN3(D)
+;   PD3 = IN2 (E)                      PD5 = IN4 (D)
 
 ; Convencao por roda: IN1=1,IN2=0 -> "frente"  |  IN1=0,IN2=1 -> "tras"
 

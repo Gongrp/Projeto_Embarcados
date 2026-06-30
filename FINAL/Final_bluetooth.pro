@@ -1,6 +1,8 @@
 /avr_sim_project_file
-/home/aluno/Documentos/Goncalo/Final_corrigido.asm
-mainasm=
+C:\Users\gongr\OneDrive\Documentos\GitHub\Projeto_Embarcados\FINAL\Final_bluetooth.asm
+mainasm=Final_bluetooth.asm
+file=Final_bluetooth.lst,772,39,810
+file=Final_bluetooth.asm,243,24,256
 clock=1000000
 device-type=ATmega328P
 device-package=28-pin-PDIP
