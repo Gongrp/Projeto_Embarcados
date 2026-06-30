@@ -5,7 +5,7 @@
 
 ;///////////////// CONSTANTES E PINAGEM ///////////////////////
 
-;PODEMOS REDEFINIR OS PARÂMETROS AQUI FACILMENTE, SEM MEXER NO CORPO DO CÓDIGO (DE OLHO EM VCS FIR E MESTRE)
+;PODEMOS REDEFINIR OS PARÂMETROS AQUI FACILMENTE, SEM MEXER NO CORPO DO CÓDIGO
 
 
 ;PINOS
@@ -77,6 +77,11 @@
 ;Variável de registro de controle de PWM
 .def SPEED_REG = r23
 
+;Variável de controle do estado do carrinho (IDLE ou RUNNING)
+.def CAR_STATE = r24
+
+; CAR_STATE = 1 -> RUNNING
+; CAR_STATE = 0 -> IDLE
 
 ;////////////// VETORES DE INTERRUPÇÃO ///////////////////////////////
 
@@ -115,7 +120,9 @@ ldi SPEED_REG, 0x01
 
 clr ROT_COUNT ;Inicia a contagem de rotações em zero
 
+ldi CAR_STATE, 0x01 ; Inicia com carrinho rodando
 
+ldi r25, 0x01       ;Registrador de comparação para avaliar o estado do carrinho (IDLE OU RUNNING)
 
 ;Configuração das portas
 
@@ -141,7 +148,6 @@ ldi r16, (1<<COM0A1)|(1<<WGM01)|(1<<WGM00)
 out TCCR0A,r16                              ;Configura timer0 no modo fast pwm, conecta comparador A no modo não inversor
 ldi r16, (1<<CS01)|(1<<CS00)
 out TCCR0B,r16				    ;Configura PS 64
-;Velocidade inicial??
 
 
 ;TIMER1 -> Delay de rotação do motor
@@ -151,10 +157,11 @@ clr r16
 sts TCCR1A,r16                  ;Configura timer 1 no modo CTC conectando comparador A no modo não inversor
 ldi r16, (1<<WGM12)
 sts TCCR1B,r16			            ;Timer inicia desativado
-ldi r16, low(ROT_DELAY)
-sts OCR1AL,r16
 ldi r16, high(ROT_DELAY)
 sts OCR1AH,r16			;Salva no comparador o número de contagens definido pelo delay desejado -> Determina ângulo de rotação
+ldi r16, low(ROT_DELAY)
+sts OCR1AL,r16
+
 
 
 ;TIMER2 -> Detecção do sensor ultrassônico (tempo entre emissão no TRIG e recepção no ECHO)
@@ -370,6 +377,9 @@ cpi     r20, LIMIAR_CM
 
 ;Se o valor em r20 for MENOR que o limiar -> obstáculo detectado
 brlo    CHANGE_DIRECTION
+
+cpse CAR_STATE, R25
+ret   ;Retorna sem reativar os motores quando o estado do carrinho for 0 (IDLE), se não só ignora
 
 ;Se não, limpa o registrador de rotações, reativa motores e volta ao loop principal
 clr ROT_COUNT
@@ -658,8 +668,8 @@ ijmp              ;Salta para o endereço em Z (subrotina da ação dos motores)
 
 command_table:
 
-.db CMD_GO,	    0xFF, high(RUN_MOTORS),  low(RUN_MOTORS)
-.db CMD_STOP,       0xFF, high(STOP_MOTORS), low(STOP_MOTORS)
+.db CMD_GO,	        0xFF, high(BT_GO),  low(BT_GO)
+.db CMD_STOP,       0xFF, high(BT_STOP), low(BT_STOP)
 .db CMD_SPEED_UP,   0xFF, high(SPEED_UP),    low(SPEED_UP)
 .db CMD_SPEED_DOWN, 0xFF, high(SPEED_DOWN),  low(SPEED_DOWN)
 
@@ -672,7 +682,17 @@ command_table:
 
 .db 0x00,0x00       ;demarcador de fim da tabela
 
+;////////////  SRs específicas bluetooth //////////////////////
 
+BT_STOP:
+clr CAR_STATE
+rcall STOP_MOTORS
+ret
+
+BT_GO:
+ldi CAR_STATE,0x01
+rcall RUN_MOTORS
+ret
 
 
 
